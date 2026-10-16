@@ -11,7 +11,7 @@ except where "Deviations from the package standard" below says otherwise.
 | Path | Role |
 |---|---|
 | `src/tensors.f90` | 3x3 helpers (`det3`, `inv3`) and the Voigt index map |
-| `src/materials.f90` | Stress and tangent per model and configuration (`<model>_ref/_cur/_mix`) |
+| `src/materials.f90` | Stress and tangent per model (`svk`, `nh`, `mnh`, `mr`) and configuration (`_ref/_cur/_mix`); `material_set` |
 | `src/elements.f90` | Element R and K per configuration (`elem_ref/_cur/_mix`) |
 | `test/test_fe_assembly.f90` | The test program |
 | `app/main.f90` | `bench`, the fpm app: times element R and K and the material call alone |
