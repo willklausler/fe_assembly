@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} ${{ matrix.compiler }} ${{ matrix.version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, compiler: gcc, version: 14 }
+          - { os: ubuntu-24.04, compiler: gcc, version: 13 }
+          - { os: macos-15, compiler: gcc, version: 14 }
+          - { os: windows-2025, compiler: gcc, version: 14 }
+          - { os: ubuntu-24.04, compiler: intel, version: '2026.1' }
+          - { os: windows-2025, compiler: intel, version: '2026.1' }
+          - { os: ubuntu-24.04, compiler: nvidia-hpc, version: '26.1' }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: fortran-lang/setup-fortran@v1
+        id: setup-fortran
+        with:
+          compiler: ${{ matrix.compiler }}
+          version: ${{ matrix.version }}
+      - uses: fortran-lang/setup-fpm@v10
+        with:
+          fpm-version: v0.13.0
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Remove GNU link, which shadows the MSVC linker that ifx calls
+        if: runner.os == 'Windows' && matrix.compiler == 'intel'
+        run: |
+          Get-Command link -All | Format-Table -AutoSize Source
+          Get-Command link -All | Where-Object { $_.Source -notmatch 'Microsoft Visual Studio' } | ForEach-Object { Remove-Item $_.Source }
+      - name: Let fpm find libgfortran
+        # The fpm binary for macOS is linked against a gcc version the runner lacks
+        if: runner.os == 'macOS'
+        run: echo "DYLD_FALLBACK_LIBRARY_PATH=$(dirname "$(gfortran -print-file-name=libgfortran.5.dylib)")" >> "$GITHUB_ENV"
+      - name: Test (debug)
+        run: fpm test --compiler ${{ steps.setup-fortran.outputs.fc }} --profile debug
+      - name: Test (release)
+        run: fpm test --compiler ${{ steps.setup-fortran.outputs.fc }} --profile release
+      - name: App
+        run: fpm run --compiler ${{ steps.setup-fortran.outputs.fc }} --profile release
+
+  flang:
+    name: ubuntu-24.04 LLVM flang 21
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install flang
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh 21
+          sudo apt-get install -y flang-21
+      - uses: fortran-lang/setup-fpm@v10
+        with:
+          fpm-version: v0.13.0
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Test (debug)
+        run: fpm test --compiler flang-21 --profile debug
+      - name: Test (release)
+        run: fpm test --compiler flang-21 --profile release
+      - name: App
+        run: fpm run --compiler flang-21 --profile release
