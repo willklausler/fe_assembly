@@ -2,3 +2,4 @@ build/
 bin/
 CLAUDE.local.md
 .venv/
+reference.zip
