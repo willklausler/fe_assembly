@@ -45,7 +45,7 @@ jobs:
       - name: Test (release)
         run: fpm test --compiler ${{ steps.setup-fortran.outputs.fc }} --profile release
       - name: App
-        run: fpm run --compiler ${{ steps.setup-fortran.outputs.fc }} --profile release
+        run: fpm run --compiler ${{ steps.setup-fortran.outputs.fc }} --profile release -- 50 1
 
   flang:
     name: ubuntu-24.04 LLVM flang 21
@@ -66,4 +66,4 @@ jobs:
       - name: Test (release)
         run: fpm test --compiler flang-21 --profile release
       - name: App
-        run: fpm run --compiler flang-21 --profile release
+        run: fpm run --compiler flang-21 --profile release -- 50 1

@@ -13,12 +13,12 @@ module elements
   implicit none
   private
 
-  public :: elem_ref, elem_cur, elem_mix
+  public :: elem_ref, elem_cur, elem_mix, ref_gradients
 
 contains
 
 pure subroutine ref_gradients(q, s, g, xref, dndx, dv)
-  ! dN/dX and the reference volume weight at point g
+  !! dN/dX and the reference volume weight at cubature point g
   type(cubature), intent(in) :: q
   type(shapefunc), intent(in) :: s
   integer, intent(in) :: g

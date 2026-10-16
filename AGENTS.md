@@ -14,7 +14,7 @@ except where "Deviations from the package standard" below says otherwise.
 | `src/materials.f90` | Stress and tangent per model and configuration (`<model>_ref/_cur/_mix`) |
 | `src/elements.f90` | Element R and K per configuration (`elem_ref/_cur/_mix`) |
 | `test/test_fe_assembly.f90` | The test program |
-| `app/main.f90` | `volume_check`, the fpm app |
+| `app/main.f90` | `bench`, the fpm app: times element R and K and the material call alone |
 | `notes/notes.typ` | Typst notes: notation, general relations, element R and K; includes the models |
 | `notes/<model>.typ` | Stress and tangent of one material model in the three configurations |
 | `notes/defs.typ` | Shared math symbols, imported by every notes file |
@@ -30,7 +30,10 @@ Directories that come with later work, created when first needed: `python/`
 ```sh
 fpm test --profile debug             # fast check, gfortran
 fpm test --profile release
-fpm run --profile release            # the app
+fpm run --profile release            # benchmark: 2000 elements, best of 7 trials
+fpm run --profile release -- 500 3   # nelem, ntrial
+perf stat -e cycles,instructions $(fpm run --profile release --runner echo)   # IPC
+valgrind $(fpm run --profile release --runner echo) 100 1                     # heap allocations
 ./ci.sh                              # gfortran, ifx, nvfortran if installed
 typst compile notes/notes.typ build/notes/notes.pdf   # notes; output is not committed
 ```
@@ -62,6 +65,15 @@ the app runs.
 - Several modules in `src/`, one per concern (kinematics, materials, element, timing), instead of one module per package: the sweep is 4 materials × 3 configurations × 3 evaluation paradigms.
 - Not yet published (no release, Zenodo, Pages): no `llms.txt`, `tools/check_docs.py`, man page, `CITATION.cff`, `CONTRIBUTING.md`, `ford.md`, `docs.yml` or `Makefile`. Add them when the maintainer decides to publish.
 - stdlib, FLAP and fplotlib are planned dependencies; add each when code first uses it.
+
+## Benchmark rules
+
+- Report the best of several trials (OS noise only adds time); every result feeds a checksum so
+  no call is optimized away.
+- The material-only timing calls the same procedure pointer on the same deformation gradients as
+  the element loop, so the difference is the element's own work.
+- Under WSL2 perf exposes cycles and instructions but no floating-point counters; FLOPs are
+  counted analytically.
 
 ## Test rules
 

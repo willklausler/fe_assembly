@@ -12,10 +12,26 @@ module materials
   implicit none
   private
 
-  public :: voigt_material, twopoint_material
+  public :: material, material_set
+  public :: energy_function, voigt_material, twopoint_material
   public :: svk_energy, svk_ref, svk_cur, svk_mix
 
+  type :: material
+    !! one model: its name, parameters and routines for every configuration
+    character(16) :: name = ''
+    real(dp), allocatable :: par(:)
+    procedure(energy_function), pointer, nopass :: energy => null()
+    procedure(voigt_material), pointer, nopass :: ref => null(), cur => null()
+    procedure(twopoint_material), pointer, nopass :: mix => null()
+  end type material
+
   abstract interface
+    pure function energy_function(f, par) result(w)
+      !! strain energy per reference volume
+      import :: dp
+      real(dp), intent(in) :: f(3,3), par(:)
+      real(dp) :: w
+    end function energy_function
     pure subroutine voigt_material(f, par, s, c)
       !! stress s(6) and tangent c(6,6) in Voigt form
       import :: dp
@@ -31,6 +47,18 @@ module materials
   end interface
 
 contains
+
+function material_set(lam, mu) result(m)
+  !! every model, with parameters that give the same small-strain Lame constants lam, mu
+  real(dp), intent(in) :: lam, mu
+  type(material) :: m(1)
+  m(1)%name = 'svk'
+  m(1)%par = [lam, mu]
+  m(1)%energy => svk_energy
+  m(1)%ref => svk_ref
+  m(1)%cur => svk_cur
+  m(1)%mix => svk_mix
+end function material_set
 
 pure function iso4(x, lam, mu) result(c)
   ! Voigt form of lam X (x) X + mu (X (x)bar X + X (x)under X)

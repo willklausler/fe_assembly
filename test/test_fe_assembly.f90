@@ -6,20 +6,22 @@ program test_fe_assembly
   use cubatures
   use shapefuncs
   use tensors, only: eye3, det3, inv3
-  use materials, only: svk_energy, svk_ref, svk_cur, svk_mix
-  use elements, only: elem_ref, elem_cur, elem_mix
+  use materials, only: material, material_set
+  use elements, only: elem_ref, elem_cur, elem_mix, ref_gradients
   implicit none
   integer :: ncheck = 0, nfail = 0
   real(dp), parameter :: eps = epsilon(1._dp), tol = 64*eps, fdtol = 64*sqrt(eps)
   ! Central differences: h ~ eps**(1/3) balances truncation and rounding
   real(dp), parameter :: h = 1e-5_dp
   character(*), parameter :: cfgname(3) = ['ref', 'cur', 'mix']
-  real(dp), parameter :: par(2) = [1.2_dp, 0.8_dp]
   type(cubature) :: q
   type(shapefunc) :: s
-  real(dp) :: xref(3,8), u(3,8), urot(3,8), rot(3,3), w(3,3)
-  real(dp) :: r(24,3), k(24,24,3), rfd(24), kfd(24,24), up(3,8), rp(24), rm(24), kk(24,24)
-  integer :: c, i, j, a
+  type(material), allocatable :: mats(:)
+  type(material) :: mat
+  real(dp) :: xref(3,8), u(3,8), urot(3,8), rot(3,3), w(3,3), jac(3,3), vol(2)
+  real(dp) :: r(24,3), k(24,24,3), rfd(24), kfd(24,24), up(3,8), rp(24), rm(24), kk(24,24), k0(24,24)
+  integer :: c, i, j, a, m, g
+  character(:), allocatable :: id
 
   ! Dependencies: trilinear hexahedron ------------------------------------
   q = cubature(CUB_HEX, 2)
@@ -42,43 +44,60 @@ program test_fe_assembly
     end do
   end do
 
-  ! Saint Venant-Kirchhoff element ----------------------------------------
-  do c = 1, 3
-    call assemble(c, u, r(:,c), k(:,:,c))
+  ! Kinematics: x = W X maps every volume element by det W ------------------
+  vol = 0
+  do g = 1, q%npoints
+    jac = matmul(xref, transpose(s%derv(:,:,g)))
+    vol = vol + [det3(jac), det3(matmul(w, jac))]*q%weights(g)
   end do
-  do j = 1, 24
-    up = u
-    call bump(up, j, h)
-    rfd(j) = energy(up)
-    call bump(up, j, -2*h)
-    rfd(j) = (rfd(j) - energy(up))/(2*h)
-  end do
-  do c = 1, 3
-    call check(close(r(:,c), rfd, fdtol), 'svk ' // cfgname(c) // ': R = dPi/du (finite differences)')
-    do j = 1, 24
-      up = u
-      call bump(up, j, h)
-      call assemble(c, up, rp, kk)
-      call bump(up, j, -2*h)
-      call assemble(c, up, rm, kk)
-      kfd(:,j) = (rp - rm)/(2*h)
-    end do
-    call check(close([k(:,:,c)], [kfd], fdtol), 'svk ' // cfgname(c) // ': K = dR/du (finite differences)')
-    call check(close([k(:,:,c)], [transpose(k(:,:,c))], tol), 'svk ' // cfgname(c) // ': K symmetric')
-    call check(close(r(:,c), r(:,1), tol), 'svk ' // cfgname(c) // ': R equals reference configuration')
-    call check(close([k(:,:,c)], [k(:,:,1)], tol), 'svk ' // cfgname(c) // ': K equals reference configuration')
-  end do
+  call check(abs(vol(2) - det3(w)*vol(1)) < tol*vol(2), 'hex8: current volume = det F * reference volume')
 
-  ! Rigid rotation about (1, 1, 1)/sqrt(3) by 0.7 rad: F = Q, so R = 0
+  ! Rigid rotation about (1, 1, 1)/sqrt(3) by 0.7 rad
   w = reshape([0._dp, 1._dp, -1._dp, -1._dp, 0._dp, 1._dp, 1._dp, -1._dp, 0._dp], [3, 3])/sqrt(3._dp)
   rot = eye3 + sin(0.7_dp)*w + (1 - cos(0.7_dp))*matmul(w, w)
   urot = matmul(rot - eye3, xref)
-  do c = 1, 3
-    call assemble(c, 0*u, rp, kk)
-    call check(maxval(abs(rp)) < tol*maxval(abs(kk)), 'svk ' // cfgname(c) // ': R = 0 at u = 0')
-    call assemble(c, urot, rp, kk)
-    call check(maxval(abs(rp)) < tol*maxval(abs(kk)), 'svk ' // cfgname(c) // ': R = 0 under rigid rotation')
+
+  ! Every material in every configuration ---------------------------------
+  mats = material_set(1.2_dp, 0.8_dp)
+  do m = 1, size(mats)
+    mat = mats(m)
+    do c = 1, 3
+      call assemble(c, u, r(:,c), k(:,:,c))
+    end do
+    do j = 1, 24
+      up = u
+      call bump(up, j, h)
+      rfd(j) = energy(up)
+      call bump(up, j, -2*h)
+      rfd(j) = (rfd(j) - energy(up))/(2*h)
+    end do
+    do c = 1, 3
+      id = trim(mat%name) // ' ' // cfgname(c) // ': '
+      call check(close(r(:,c), rfd, fdtol), id // 'R = dPi/du (finite differences)')
+      do j = 1, 24
+        up = u
+        call bump(up, j, h)
+        call assemble(c, up, rp, kk)
+        call bump(up, j, -2*h)
+        call assemble(c, up, rm, kk)
+        kfd(:,j) = (rp - rm)/(2*h)
+      end do
+      call check(close([k(:,:,c)], [kfd], fdtol), id // 'K = dR/du (finite differences)')
+      call check(close([k(:,:,c)], [transpose(k(:,:,c))], tol), id // 'K symmetric')
+      call check(close(r(:,c), r(:,1), tol), id // 'R equals reference configuration')
+      call check(close([k(:,:,c)], [k(:,:,1)], tol), id // 'K equals reference configuration')
+
+      call assemble(c, 0*u, rp, kk)
+      call check(maxval(abs(rp)) < tol*maxval(abs(kk)), id // 'R = 0 at u = 0')
+      if (m == 1 .and. c == 1) k0 = kk
+      call check(close([kk], [k0], tol), id // 'K at u = 0 equals the small-strain K of ' // trim(mats(1)%name))
+      call assemble(c, urot, rp, kk)
+      call check(maxval(abs(rp)) < tol*maxval(abs(kk)), id // 'R = 0 under rigid rotation')
+    end do
   end do
+
+  ! gfortran does not free main-program allocatables at exit; LeakSanitizer would report them
+  deallocate(mats, mat%par, id)
 
   print '(i0, a, i0, a)', ncheck - nfail, ' of ', ncheck, ' checks passed'
   if (nfail > 0) error stop 1
@@ -115,24 +134,23 @@ subroutine assemble(cfg, uu, rr, kk)
   real(dp), intent(out) :: rr(24), kk(24,24)
   select case (cfg)
   case (1)
-    call elem_ref(q, s, xref, uu, svk_ref, par, rr, kk)
+    call elem_ref(q, s, xref, uu, mat%ref, mat%par, rr, kk)
   case (2)
-    call elem_cur(q, s, xref, uu, svk_cur, par, rr, kk)
+    call elem_cur(q, s, xref, uu, mat%cur, mat%par, rr, kk)
   case default
-    call elem_mix(q, s, xref, uu, svk_mix, par, rr, kk)
+    call elem_mix(q, s, xref, uu, mat%mix, mat%par, rr, kk)
   end select
 end subroutine assemble
 
 function energy(uu) result(pi)
   ! element strain energy, integrated like the element routines
   real(dp), intent(in) :: uu(3,8)
-  real(dp) :: pi, jac(3,3), dndx(3,8)
+  real(dp) :: pi, dndx(3,8), dv
   integer :: g
   pi = 0
   do g = 1, q%npoints
-    jac = matmul(xref, transpose(s%derv(:,:,g)))
-    dndx = matmul(transpose(inv3(jac)), s%derv(:,:,g))
-    pi = pi + svk_energy(eye3 + matmul(uu, transpose(dndx)), par)*det3(jac)*q%weights(g)
+    call ref_gradients(q, s, g, xref, dndx, dv)
+    pi = pi + mat%energy(eye3 + matmul(uu, transpose(dndx)), mat%par)*dv
   end do
 end function energy
 

@@ -1,41 +1,121 @@
-program volume_check
-  !! Maps a unit-cube hex8 element through homogeneous deformations x = F X
-  !! and integrates the current volume v = sum_g det(dx/dxi) w_g, which must
-  !! equal J = det(F) times the reference volume V = 1.
-  use, intrinsic :: iso_fortran_env, only: dp => real64
+program bench
+  !! Times element R and K assembly for every material and configuration, and
+  !! the material call alone on the same deformation gradients.
+  !! Usage: fpm run --profile release [-- nelem [ntrial]]
+  use, intrinsic :: iso_fortran_env, only: dp => real64, int64
   use cubatures, only: cubature, CUB_HEX
   use shapefuncs, only: shapefunc
-  use tensors, only: det3
+  use tensors, only: eye3
+  use materials, only: material, material_set
+  use elements, only: elem_ref, elem_cur, elem_mix, ref_gradients
   implicit none
-  integer, parameter :: ncase = 4
-  character(*), parameter :: names(ncase) = [character(16) :: 'identity', 'uniaxial 1.5', &
-                                           & 'simple shear 0.5', 'dilation 1.1']
-  real(dp) :: f(3,3,ncase), xref(3,8), x(3,8), jac(3,3), v
+  character(*), parameter :: cfgname(3) = ['ref', 'cur', 'mix']
+  integer :: nelem = 2000, ntrial = 7
   type(cubature) :: q
   type(shapefunc) :: s
-  integer :: c, g
+  type(material), allocatable :: mats(:)
+  real(dp), allocatable :: xref(:,:,:), u(:,:,:), fg(:,:,:,:)
+  real(dp) :: dndx(3,8), dv, telem, tmat, checksum = 0
+  integer :: a, i, e, g, m, c
 
-  f = 0
-  do c = 1, ncase
-    f(1,1,c) = 1; f(2,2,c) = 1; f(3,3,c) = 1
-  end do
-  f(1,1,2) = 1.5_dp
-  f(1,2,3) = 0.5_dp
-  f(:,:,4) = 1.1_dp*f(:,:,1)
-
+  call int_arg(1, nelem)
+  call int_arg(2, ntrial)
   q = cubature(CUB_HEX, 2)
   s = shapefunc(q, 1)
-  xref = (s%coords + 1)/2
+  mats = material_set(1.2_dp, 0.8_dp)
 
-  write(*, '(a16, 2a12)') 'case', 'det F', 'v / V'
-  do c = 1, ncase
-    x = matmul(f(:,:,c), xref)
-    v = 0
-    do g = 1, q%npoints
-      jac = matmul(x, transpose(s%derv(:,:,g)))
-      v = v + det3(jac)*q%weights(g)
+  ! Distinct distorted elements under moderate deformation, so no two calls
+  ! see the same data; F at every point feeds the material-only timing.
+  allocate(xref(3, 8, nelem), u(3, 8, nelem), fg(3, 3, q%npoints, nelem))
+  do e = 1, nelem
+    do a = 1, 8
+      do i = 1, 3
+        xref(i,a,e) = (s%coords(i,a) + 1)/2 + 0.05_dp*cos(real(3*a + i + 7*e, dp))
+        u(i,a,e) = 0.05_dp*sin(real(5*a + 2*i + 11*e, dp))
+      end do
     end do
-    write(*, '(a16, 2f12.6)') names(c), det3(f(:,:,c)), v
+    do g = 1, q%npoints
+      call ref_gradients(q, s, g, xref(:,:,e), dndx, dv)
+      fg(:,:,g,e) = eye3 + matmul(u(:,:,e), transpose(dndx))
+    end do
   end do
 
-end program volume_check
+  write(*, '(a, i0, a, i0, a)') 'hex8, 2x2x2 points, ', nelem, ' elements, best of ', ntrial, ' trials'
+  write(*, '(a8, a5, 3a12)') 'model', 'cfg', 'element ns', 'material ns', 'material %'
+  do m = 1, size(mats)
+    do c = 1, 3
+      telem = best_time(m, c, .false.)
+      tmat = best_time(m, c, .true.)
+      write(*, '(a8, a5, 2f12.0, f12.1)') trim(mats(m)%name), cfgname(c), &
+        & 1e9_dp*telem/nelem, 1e9_dp*tmat/nelem, 100*tmat/telem
+    end do
+  end do
+  write(*, '(a, es12.4)') 'checksum ', checksum
+  ! gfortran does not free main-program allocatables at exit; LeakSanitizer would report them
+  deallocate(mats, xref, u, fg)
+
+contains
+
+subroutine int_arg(n, val)
+  ! replace val by command argument n, if present
+  integer, intent(in) :: n
+  integer, intent(inout) :: val
+  character(32) :: arg
+  integer :: stat
+  call get_command_argument(n, arg, status=stat)
+  if (stat == 0) read(arg, *) val
+end subroutine int_arg
+
+function best_time(m, c, matonly) result(t)
+  ! minimum wall time over ntrial sweeps, in seconds
+  integer, intent(in) :: m, c
+  logical, intent(in) :: matonly
+  real(dp) :: t
+  integer(int64) :: t0, t1, rate
+  integer :: trial
+  t = huge(t)
+  do trial = 1, ntrial
+    call system_clock(t0, rate)
+    call sweep(m, c, matonly)
+    call system_clock(t1)
+    t = min(t, real(t1 - t0, dp)/rate)
+  end do
+end function best_time
+
+subroutine sweep(m, c, matonly)
+  ! one pass over all elements; results feed the checksum so no call is optimized away
+  integer, intent(in) :: m, c
+  logical, intent(in) :: matonly
+  real(dp) :: r(24), k(24,24), sv(6), cv(6,6), p(3,3), am(9,9)
+  integer :: e, g
+  associate (mt => mats(m))
+    do e = 1, nelem
+      if (matonly) then
+        do g = 1, q%npoints
+          select case (c)
+          case (1)
+            call mt%ref(fg(:,:,g,e), mt%par, sv, cv)
+          case (2)
+            call mt%cur(fg(:,:,g,e), mt%par, sv, cv)
+          case default
+            call mt%mix(fg(:,:,g,e), mt%par, p, am)
+            cv(1,1) = am(1,1)
+          end select
+          checksum = checksum + cv(1,1)
+        end do
+      else
+        select case (c)
+        case (1)
+          call elem_ref(q, s, xref(:,:,e), u(:,:,e), mt%ref, mt%par, r, k)
+        case (2)
+          call elem_cur(q, s, xref(:,:,e), u(:,:,e), mt%cur, mt%par, r, k)
+        case default
+          call elem_mix(q, s, xref(:,:,e), u(:,:,e), mt%mix, mt%par, r, k)
+        end select
+        checksum = checksum + k(1,1)
+      end if
+    end do
+  end associate
+end subroutine sweep
+
+end program bench
