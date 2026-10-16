@@ -1,0 +1,4 @@
+build/
+bin/
+CLAUDE.local.md
+.venv/
