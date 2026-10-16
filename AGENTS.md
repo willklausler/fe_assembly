@@ -60,9 +60,11 @@ the app runs.
   2 E_12 etc., so 6x6 tangents hold tensor components unscaled and the factor 2 lives in the shear
   rows of the B-matrix. Two-point index (i, J) -> i + 3 (J - 1), column-major.
 - Element dof order: node, then direction, `3 (a - 1) + i`.
-- Material routines share one interface per storage scheme (`voigt_material`, `twopoint_material`):
-  `(F, par, stress, tangent)`, so the element loop is identical across evaluation paradigms and only
-  the material call changes.
+- Material evaluation is batched: elements gather F at all cubature points, make one call
+  `mat%ref|cur|mix(n, F(3,3,n), stress(...,n), tangent(...,n))`, then assemble. Native models
+  implement it by looping over per-point routines (`voigt_material`, `twopoint_material`
+  interfaces); other paradigms extend type `material` and override only these three methods, so
+  the element loop is identical across paradigms and only the material call changes.
 - Every tangent is tested by central differences of the residual, and every residual by central
   differences of the element energy; R and K must agree across the three configurations.
 
@@ -76,6 +78,8 @@ the app runs.
 
 - Report the best of several trials (OS noise only adds time); every result feeds a checksum so
   no call is optimized away.
+- The native bench times with `cpu_time`: ifx's `system_clock` follows the wall clock, which WSL2
+  re-syncs with jumps (a sweep once measured -1 s).
 - The material-only timing calls the same procedure pointer on the same deformation gradients as
   the element loop, so the difference is the element's own work.
 - Under WSL2 perf exposes cycles and instructions but no floating-point counters; FLOPs are

@@ -134,11 +134,11 @@ subroutine assemble(cfg, uu, rr, kk)
   real(dp), intent(out) :: rr(24), kk(24,24)
   select case (cfg)
   case (1)
-    call elem_ref(q, s, xref, uu, mat%ref, mat%par, rr, kk)
+    call elem_ref(q, s, xref, uu, mat, rr, kk)
   case (2)
-    call elem_cur(q, s, xref, uu, mat%cur, mat%par, rr, kk)
+    call elem_cur(q, s, xref, uu, mat, rr, kk)
   case default
-    call elem_mix(q, s, xref, uu, mat%mix, mat%par, rr, kk)
+    call elem_mix(q, s, xref, uu, mat, rr, kk)
   end select
 end subroutine assemble
 

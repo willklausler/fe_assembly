@@ -8,11 +8,13 @@ module elements
   !! K is assembled in 3x3 node blocks: the product tangent . grad N_b is formed
   !! once per node b and reused for every a <= b; the lower blocks are mirrored,
   !! which assumes a symmetric K (hyperelastic materials).
+  !! Each element routine runs in two passes: kinematics at every point, one
+  !! batched material call, then assembly.
   use, intrinsic :: iso_fortran_env, only: dp => real64
   use cubatures, only: cubature
   use shapefuncs, only: shapefunc
   use tensors, only: eye3, det3, inv3
-  use materials, only: voigt_material, twopoint_material
+  use materials, only: material
   implicit none
   private
 
@@ -133,35 +135,39 @@ pure subroutine mirror(k)
   end do
 end subroutine mirror
 
-pure subroutine elem_ref(q, s, xref, u, mat, par, r, k)
+subroutine elem_ref(q, s, xref, u, mat, r, k)
   !! total Lagrangian: R = int B^T S dV, K = int (B^T CC B + geometric(S)) dV
   type(cubature), intent(in) :: q
   type(shapefunc), intent(in) :: s
-  real(dp), intent(in) :: xref(:,:), u(:,:), par(:)
-  procedure(voigt_material) :: mat
+  real(dp), intent(in) :: xref(:,:), u(:,:)
+  class(material), intent(in) :: mat
   real(dp), intent(out) :: r(:), k(:,:)
-  real(dp) :: dndx(3, s%nnodes), bm(6, 3*s%nnodes), f(3,3), sv(6), cv(6,6), dv
+  real(dp) :: dndx(3, s%nnodes, q%npoints), dv(q%npoints), f(3,3,q%npoints)
+  real(dp) :: sv(6, q%npoints), cv(6,6,q%npoints), bm(6, 3*s%nnodes)
   integer :: g
   r = 0
   k = 0
   do g = 1, q%npoints
-    call shape_gradients(q, s, g, xref, dndx, dv)
-    f = grad_u(u, dndx)
-    call mat(f, par, sv, cv)
-    call bmatrix(f, dndx, bm)
-    call add_voigt(bm, dndx, sv, cv, dv, r, k)
+    call shape_gradients(q, s, g, xref, dndx(:,:,g), dv(g))
+    f(:,:,g) = grad_u(u, dndx(:,:,g))
+  end do
+  call mat%ref(q%npoints, f, sv, cv)
+  do g = 1, q%npoints
+    call bmatrix(f(:,:,g), dndx(:,:,g), bm)
+    call add_voigt(bm, dndx(:,:,g), sv(:,g), cv(:,:,g), dv(g), r, k)
   end do
   call mirror(k)
 end subroutine elem_ref
 
-pure subroutine elem_cur(q, s, xref, u, mat, par, r, k)
+subroutine elem_cur(q, s, xref, u, mat, r, k)
   !! updated Lagrangian: R = int B^T sigma dv, K = int (B^T cc B + geometric(sigma)) dv
   type(cubature), intent(in) :: q
   type(shapefunc), intent(in) :: s
-  real(dp), intent(in) :: xref(:,:), u(:,:), par(:)
-  procedure(voigt_material) :: mat
+  real(dp), intent(in) :: xref(:,:), u(:,:)
+  class(material), intent(in) :: mat
   real(dp), intent(out) :: r(:), k(:,:)
-  real(dp) :: x(3, s%nnodes), dndx(3, s%nnodes), bm(6, 3*s%nnodes), f(3,3), sv(6), cv(6,6), dv
+  real(dp) :: x(3, s%nnodes), dndx(3, s%nnodes, q%npoints), dv(q%npoints), f(3,3,q%npoints)
+  real(dp) :: sv(6, q%npoints), cv(6,6,q%npoints), bm(6, 3*s%nnodes), fi(3,3)
   integer :: g, a, jj
   r = 0
   k = 0
@@ -169,46 +175,53 @@ pure subroutine elem_cur(q, s, xref, u, mat, par, r, k)
   do g = 1, q%npoints
     ! Discrete updated Lagrangian: dN/dx and dv from the current coordinates,
     ! F from F^-1 = I - du/dx; nothing is pushed forward from the reference configuration
-    call shape_gradients(q, s, g, x, dndx, dv)
-    f = eye3
+    call shape_gradients(q, s, g, x, dndx(:,:,g), dv(g))
+    fi = eye3
     do a = 1, s%nnodes
       do jj = 1, 3
-        f(:,jj) = f(:,jj) - u(:,a)*dndx(jj,a)
+        fi(:,jj) = fi(:,jj) - u(:,a)*dndx(jj,a,g)
       end do
     end do
-    f = inv3(f)
-    call mat(f, par, sv, cv)
+    f(:,:,g) = inv3(fi)
+  end do
+  call mat%cur(q%npoints, f, sv, cv)
+  do g = 1, q%npoints
     ! ponytail: dense B with F = I spends half its work on zeros; a sparse spatial B if cur matters
-    call bmatrix(eye3, dndx, bm)
-    call add_voigt(bm, dndx, sv, cv, dv, r, k)
+    call bmatrix(eye3, dndx(:,:,g), bm)
+    call add_voigt(bm, dndx(:,:,g), sv(:,g), cv(:,:,g), dv(g), r, k)
   end do
   call mirror(k)
 end subroutine elem_cur
 
-pure subroutine elem_mix(q, s, xref, u, mat, par, r, k)
+subroutine elem_mix(q, s, xref, u, mat, r, k)
   !! two-point: R = int P : grad N dV, K_aibk = int N_a,J A_iJkL N_b,L dV (geometric term inside AA)
   type(cubature), intent(in) :: q
   type(shapefunc), intent(in) :: s
-  real(dp), intent(in) :: xref(:,:), u(:,:), par(:)
-  procedure(twopoint_material) :: mat
+  real(dp), intent(in) :: xref(:,:), u(:,:)
+  class(material), intent(in) :: mat
   real(dp), intent(out) :: r(:), k(:,:)
-  real(dp) :: dndx(3, s%nnodes), f(3,3), p(3,3), am(9,9), w(9,3), dv
+  real(dp) :: dndx(3, s%nnodes, q%npoints), dv(q%npoints), f(3,3,q%npoints)
+  real(dp) :: p(3,3,q%npoints), am(9,9,q%npoints), w(9,3)
   integer :: g, a, b, i, kk, ia, ib
   r = 0
   k = 0
   do g = 1, q%npoints
-    call shape_gradients(q, s, g, xref, dndx, dv)
-    f = grad_u(u, dndx)
-    call mat(f, par, p, am)
+    call shape_gradients(q, s, g, xref, dndx(:,:,g), dv(g))
+    f(:,:,g) = grad_u(u, dndx(:,:,g))
+  end do
+  call mat%mix(q%npoints, f, p, am)
+  do g = 1, q%npoints
     do a = 1, s%nnodes
       ia = 3*(a - 1)
-      r(ia+1:ia+3) = r(ia+1:ia+3) + matmul(p, dndx(:,a))*dv
+      do i = 1, 3
+        r(ia + i) = r(ia + i) + (p(i,1,g)*dndx(1,a,g) + p(i,2,g)*dndx(2,a,g) + p(i,3,g)*dndx(3,a,g))*dv(g)
+      end do
     end do
     do b = 1, s%nnodes
       ib = 3*(b - 1)
       ! W(iJ, k) = A_iJkL N_b,L dv, 81 multiply-adds, reused for every a <= b
       do kk = 1, 3
-        w(:,kk) = (am(:,kk)*dndx(1,b) + am(:,kk+3)*dndx(2,b) + am(:,kk+6)*dndx(3,b))*dv
+        w(:,kk) = (am(:,kk,g)*dndx(1,b,g) + am(:,kk+3,g)*dndx(2,b,g) + am(:,kk+6,g)*dndx(3,b,g))*dv(g)
       end do
       do a = 1, b
         ia = 3*(a - 1)
@@ -216,7 +229,7 @@ pure subroutine elem_mix(q, s, xref, u, mat, par, r, k)
         do kk = 1, 3
           do i = 1, 3
             k(ia + i, ib + kk) = k(ia + i, ib + kk) &
-              & + dndx(1,a)*w(i,kk) + dndx(2,a)*w(i+3,kk) + dndx(3,a)*w(i+6,kk)
+              & + dndx(1,a,g)*w(i,kk) + dndx(2,a,g)*w(i+3,kk) + dndx(3,a,g)*w(i+6,kk)
           end do
         end do
       end do

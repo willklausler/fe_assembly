@@ -2,7 +2,7 @@ program bench
   !! Times element R and K assembly for every material and configuration, and
   !! the material call alone on the same deformation gradients.
   !! Usage: fpm run --profile release [-- nelem [ntrial]]
-  use, intrinsic :: iso_fortran_env, only: dp => real64, int64
+  use, intrinsic :: iso_fortran_env, only: dp => real64
   use cubatures, only: cubature, CUB_HEX
   use shapefuncs, only: shapefunc
   use tensors, only: eye3
@@ -67,18 +67,19 @@ subroutine int_arg(n, val)
 end subroutine int_arg
 
 function best_time(m, c, matonly) result(t)
-  ! minimum wall time over ntrial sweeps, in seconds
+  ! minimum process CPU time over ntrial sweeps, in seconds
+  ! cpu_time, not system_clock: ifx's system_clock follows the wall clock, which
+  ! WSL2 re-syncs with jumps (one sweep measured -1 s); the kernels are single-threaded
   integer, intent(in) :: m, c
   logical, intent(in) :: matonly
-  real(dp) :: t
-  integer(int64) :: t0, t1, rate
+  real(dp) :: t, t0, t1
   integer :: trial
   t = huge(t)
   do trial = 1, ntrial
-    call system_clock(t0, rate)
+    call cpu_time(t0)
     call sweep(m, c, matonly)
-    call system_clock(t1)
-    t = min(t, real(t1 - t0, dp)/rate)
+    call cpu_time(t1)
+    t = min(t, t1 - t0)
   end do
 end function best_time
 
@@ -86,31 +87,30 @@ subroutine sweep(m, c, matonly)
   ! one pass over all elements; results feed the checksum so no call is optimized away
   integer, intent(in) :: m, c
   logical, intent(in) :: matonly
-  real(dp) :: r(24), k(24,24), sv(6), cv(6,6), p(3,3), am(9,9)
-  integer :: e, g
+  real(dp) :: r(24), k(24,24), sv(6, q%npoints), cv(6,6,q%npoints), p(3,3,q%npoints), am(9,9,q%npoints)
+  integer :: e
   associate (mt => mats(m))
     do e = 1, nelem
       if (matonly) then
-        do g = 1, q%npoints
-          select case (c)
-          case (1)
-            call mt%ref(fg(:,:,g,e), mt%par, sv, cv)
-          case (2)
-            call mt%cur(fg(:,:,g,e), mt%par, sv, cv)
-          case default
-            call mt%mix(fg(:,:,g,e), mt%par, p, am)
-            cv(1,1) = am(1,1)
-          end select
-          checksum = checksum + cv(1,1)
-        end do
+        ! one batched call per element, as the element routines make
+        select case (c)
+        case (1)
+          call mt%ref(q%npoints, fg(:,:,:,e), sv, cv)
+        case (2)
+          call mt%cur(q%npoints, fg(:,:,:,e), sv, cv)
+        case default
+          call mt%mix(q%npoints, fg(:,:,:,e), p, am)
+          cv(1,1,1) = am(1,1,1)
+        end select
+        checksum = checksum + cv(1,1,1)
       else
         select case (c)
         case (1)
-          call elem_ref(q, s, xref(:,:,e), u(:,:,e), mt%ref, mt%par, r, k)
+          call elem_ref(q, s, xref(:,:,e), u(:,:,e), mt, r, k)
         case (2)
-          call elem_cur(q, s, xref(:,:,e), u(:,:,e), mt%cur, mt%par, r, k)
+          call elem_cur(q, s, xref(:,:,e), u(:,:,e), mt, r, k)
         case default
-          call elem_mix(q, s, xref(:,:,e), u(:,:,e), mt%mix, mt%par, r, k)
+          call elem_mix(q, s, xref(:,:,e), u(:,:,e), mt, r, k)
         end select
         checksum = checksum + k(1,1)
       end if

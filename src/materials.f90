@@ -2,10 +2,13 @@
 module materials
   !! Hyperelastic stresses and tangents, one routine per model and configuration.
   !!
-  !! Every routine takes the deformation gradient F and a parameter array and
-  !! returns the stress and tangent in the configuration's natural storage:
+  !! Every per-point routine takes the deformation gradient F and a parameter array
+  !! and returns the stress and tangent in the configuration's natural storage:
   !! *_ref: S and CC in Voigt form (6, 6x6); *_cur: sigma and cc in Voigt form;
   !! *_mix: P (3x3) and AA (9x9, two-point index i + 3 (J - 1)).
+  !! Elements call the batched methods mat%ref, mat%cur, mat%mix on all points of
+  !! an element at once; other evaluation paradigms (jax/) extend type material
+  !! and override only these three methods.
   !! Formulas and notation: notes/notes.typ.
   !! Models with ln J stop with error stop when det F <= 0 (an inverted element).
   use, intrinsic :: iso_fortran_env, only: dp => real64
@@ -21,12 +24,19 @@ module materials
   public :: mr_energy, mr_ref, mr_cur, mr_mix
 
   type :: material
-    !! one model: its name, parameters and routines for every configuration
+    !! one model: its name, parameters, per-point routines and batched methods
     character(16) :: name = ''
     real(dp), allocatable :: par(:)
     procedure(energy_function), pointer, nopass :: energy => null()
-    procedure(voigt_material), pointer, nopass :: ref => null(), cur => null()
-    procedure(twopoint_material), pointer, nopass :: mix => null()
+    procedure(voigt_material), pointer, nopass :: ref_pt => null(), cur_pt => null()
+    procedure(twopoint_material), pointer, nopass :: mix_pt => null()
+  contains
+    procedure :: ref => material_ref
+      !! S and CC at n points: f(3,3,n) -> s(6,n), c(6,6,n)
+    procedure :: cur => material_cur
+      !! sigma and cc at n points: f(3,3,n) -> s(6,n), c(6,6,n)
+    procedure :: mix => material_mix
+      !! P and AA at n points: f(3,3,n) -> p(3,3,n), a(9,9,n)
   end type material
 
   abstract interface
@@ -52,6 +62,43 @@ module materials
 
 contains
 
+!-----------------------------------------------------------------------
+! Batched evaluation: native loops over the per-point routines
+!-----------------------------------------------------------------------
+
+subroutine material_ref(self, n, f, s, c)
+  class(material), intent(in) :: self
+  integer, intent(in) :: n
+  real(dp), intent(in) :: f(3,3,n)
+  real(dp), intent(out) :: s(6,n), c(6,6,n)
+  integer :: g
+  do g = 1, n
+    call self%ref_pt(f(:,:,g), self%par, s(:,g), c(:,:,g))
+  end do
+end subroutine material_ref
+
+subroutine material_cur(self, n, f, s, c)
+  class(material), intent(in) :: self
+  integer, intent(in) :: n
+  real(dp), intent(in) :: f(3,3,n)
+  real(dp), intent(out) :: s(6,n), c(6,6,n)
+  integer :: g
+  do g = 1, n
+    call self%cur_pt(f(:,:,g), self%par, s(:,g), c(:,:,g))
+  end do
+end subroutine material_cur
+
+subroutine material_mix(self, n, f, p, a)
+  class(material), intent(in) :: self
+  integer, intent(in) :: n
+  real(dp), intent(in) :: f(3,3,n)
+  real(dp), intent(out) :: p(3,3,n), a(9,9,n)
+  integer :: g
+  do g = 1, n
+    call self%mix_pt(f(:,:,g), self%par, p(:,:,g), a(:,:,g))
+  end do
+end subroutine material_mix
+
 function material_set(lam, mu) result(m)
   !! every model, with parameters that give the same small-strain Lame constants lam, mu
   real(dp), intent(in) :: lam, mu
@@ -61,28 +108,28 @@ function material_set(lam, mu) result(m)
   m(1)%name = 'svk'
   m(1)%par = [lam, mu]
   m(1)%energy => svk_energy
-  m(1)%ref => svk_ref
-  m(1)%cur => svk_cur
-  m(1)%mix => svk_mix
+  m(1)%ref_pt => svk_ref
+  m(1)%cur_pt => svk_cur
+  m(1)%mix_pt => svk_mix
   m(2)%name = 'nh'
   m(2)%par = [lam, mu]
   m(2)%energy => nh_energy
-  m(2)%ref => nh_ref
-  m(2)%cur => nh_cur
-  m(2)%mix => nh_mix
+  m(2)%ref_pt => nh_ref
+  m(2)%cur_pt => nh_cur
+  m(2)%mix_pt => nh_mix
   m(3)%name = 'mnh'
   m(3)%par = [kappa, mu]
   m(3)%energy => mnh_energy
-  m(3)%ref => mnh_ref
-  m(3)%cur => mnh_cur
-  m(3)%mix => mnh_mix
+  m(3)%ref_pt => mnh_ref
+  m(3)%cur_pt => mnh_cur
+  m(3)%mix_pt => mnh_mix
   ! mu = 2 (c1 + c2); the split c2 = mu/8 is arbitrary but keeps both terms active
   m(4)%name = 'mr'
   m(4)%par = [3*mu/8, mu/8, kappa]
   m(4)%energy => mr_energy
-  m(4)%ref => mr_ref
-  m(4)%cur => mr_cur
-  m(4)%mix => mr_mix
+  m(4)%ref_pt => mr_ref
+  m(4)%cur_pt => mr_cur
+  m(4)%mix_pt => mr_mix
 end function material_set
 
 !-----------------------------------------------------------------------
