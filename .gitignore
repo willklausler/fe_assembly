@@ -3,3 +3,4 @@ bin/
 CLAUDE.local.md
 .venv/
 reference.zip
+notes/*.pdf
