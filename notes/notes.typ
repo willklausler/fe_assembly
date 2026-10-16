@@ -80,3 +80,4 @@ $(kappa, mu)$; compare them with $kappa = lambda + 2 mu \/ 3$.
 #include "svk.typ"
 #include "neohooke.typ"
 #include "modneohooke.typ"
+#include "mooneyrivlin.typ"
