@@ -23,12 +23,12 @@ except where "Deviations from the package standard" below says otherwise.
 | `jax/src/pybridge.c` | Embedded interpreter; Fortran buffers cross as memoryviews |
 | `jax/src/jax_materials.f90` | `jax_material` extends `material`, overriding only the batched methods |
 | `jax/test/test_jax.f90`, `jax/app/main.f90` | AD against the closed forms; native-versus-JAX bench |
+| `socket/` | Subpackage: socket-server paradigm, `python/server.py` (fe_jax behind TCP) and a pure-Fortran POSIX client `socket_materials.f90`; Linux, not in CI |
 | `ci.sh` | Local check with every installed compiler |
 | `.github/workflows/ci.yml` | GitHub CI: compiler × OS matrix |
 | `CLAUDE.local.md` | Maintainer's goal and specification; gitignored |
 
-Directories that come with later work, created when first needed: the socket
-server, `example/`.
+Directories that come with later work, created when first needed: `example/`.
 
 ## Commands
 
@@ -43,6 +43,8 @@ valgrind $(fpm run --profile release --runner echo) 100 1                     # 
 typst compile notes/notes.typ build/notes/notes.pdf   # notes; output is not committed
 jax/run.sh test --profile release    # JAX paradigm: AD against closed forms (needs ../.venv with jax)
 jax/run.sh run --profile release     # native versus JAX: JIT, batch 1 / 8 / mesh, element
+(cd socket && fpm test)              # socket paradigm: starts python/server.py on port 65400
+(cd socket && fpm run --profile release)   # native versus socket server
 ```
 
 Done means: the tests pass for every compiler you have in both profiles, and
@@ -91,6 +93,9 @@ the app runs.
   the element loop, so the difference is the element's own work.
 - Under WSL2 perf exposes cycles and instructions but no floating-point counters; FLOPs are
   counted analytically.
+- Paradigm benches report the transport alone (a no-op request of the same size), so kernel and
+  overhead separate. Under WSL2 a TCP loopback round trip costs about 75 us whatever the size
+  (process wake-up latency); compare socket results against that floor.
 
 ## Test rules
 

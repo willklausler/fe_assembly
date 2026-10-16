@@ -1,0 +1,22 @@
+name = "fe_assembly_socket"
+version = "0.1.0"
+license = "MIT"
+author = "Will Klausler"
+maintainer = "226649647+willklausler@users.noreply.github.com"
+copyright = "Copyright 2026, Will Klausler"
+description = "Socket-server material paradigm for fe_assembly: a Python fe_jax server over TCP"
+
+[dependencies]
+fe_assembly = { path = ".." }
+
+# Linux only (MSG_MORE, MSG_NOSIGNAL, clock_gettime). The server is
+# python/server.py, run with ../.venv/bin/python unless FE_PYTHON is set.
+[features]
+debug.gfortran.flags = "-g -Wall -fbacktrace -fcheck=all -Wextra -Wimplicit-interface -finit-real=snan -fsanitize=address,undefined"
+debug.ifx.linux.flags = "-g -check all -warn all -traceback -fpe0"
+release.gfortran.flags = "-O3 -fbacktrace -march=native -funroll-loops"
+release.ifx.linux.flags = "-O3 -xHost -unroll"
+
+[profiles]
+debug = ["debug"]
+release = ["release"]
