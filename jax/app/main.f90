@@ -8,11 +8,11 @@ program bench_jax
   use shapefuncs, only: shapefunc
   use tensors, only: eye3
   use materials, only: material, material_set
-  use elements, only: elem_ref, elem_mix, shape_gradients
-  use jax_materials, only: jax_material, jax_init, jax_set, jax_finalize, wtime
+  use elements, only: elem_ref, elem_cur, elem_mix, shape_gradients
+  use jax_materials, only: jax_material, jax_init, jax_set, jax_finalize, jax_ping, wtime
   implicit none
   character(*), parameter :: cfgname(3) = ['ref', 'cur', 'mix']
-  integer, parameter :: cfgs(2) = [1, 3]
+  integer, parameter :: cfgs(3) = [1, 2, 3]
   integer :: nelem = 200, ntrial = 5, npt, ntot
   character(256) :: python
   type(cubature) :: q
@@ -34,7 +34,7 @@ program bench_jax
   npt = q%npoints
   ntot = npt*nelem
   nat = material_set(1.2_dp, 0.8_dp)
-  jx = jax_set(1.2_dp, 0.8_dp, ['ref', 'mix'])
+  jx = jax_set(1.2_dp, 0.8_dp, ['ref', 'cur', 'mix'], npt)
 
   ! Same elements as the native bench; F of element e at columns npt (e - 1) + 1 ... npt e
   allocate(xref(3, 8, nelem), u(3, 8, nelem), fg(3, 3, ntot), st(9, ntot), tg(81, ntot))
@@ -52,15 +52,18 @@ program bench_jax
   end do
 
   write(*, '(a, i0, a, i0, a)') 'hex8, ', nelem, ' elements, best of ', ntrial, ' trials, wall time'
+  ! the bridge alone: Fortran -> C -> Python and back, no JAX
+  write(*, '(a, 3f9.2, a)') 'bridge round trip without JAX, us per call (n = 1, 8, mesh):', &
+    & 1e6_dp*ping(1), 1e6_dp*ping(npt), 1e6_dp*ping(ntot)
   write(*, '(a)') '                     -------- material, ns per point --------   -- element, us --'
-  write(*, '(a5, a4, a9, 5a11, 2a9)') 'model', 'cfg', 'JIT s', 'native', 'JAX 1/call', 'JAX 8/call', &
+  write(*, '(a5, a4, a9, 5a11, 2a9)') 'model', 'cfg', 'JIT1 s', 'native', 'JAX 1/call', 'JAX 8/call', &
     & 'JAX mesh', 'JAX/nat 8', 'native', 'JAX'
   do m = 1, size(nat)
     do ic = 1, size(cfgs)
       c = cfgs(ic)
-      ! first call of each batch size compiles; time the first, warm the others
+      ! jax_set compiled for npt; the first call of another batch size compiles again
       t0 = wtime()
-      call batches(jx(m), c, npt)
+      call batches(jx(m), c, 1)
       tjit = wtime() - t0
       call batches(jx(m), c, 1)
       call batches(jx(m), c, ntot)
@@ -110,17 +113,35 @@ function best(mt, c, nb, elements) result(t)
   end do
 end function best
 
+function ping(nb) result(t)
+  ! best wall time of one bridge round trip without JAX on nb points, in seconds
+  integer, intent(in) :: nb
+  real(dp) :: t, t0
+  integer :: trial, k
+  t = huge(t)
+  do trial = 1, ntrial
+    t0 = wtime()
+    do k = 1, ntot, nb
+      call jax_ping(nb, fg(:,:,k), st(:,k), tg(:,k))
+    end do
+    t = min(t, (wtime() - t0)/(ntot/nb))
+  end do
+end function ping
+
 subroutine batches(mt, c, nb)
   ! all ntot points in calls of nb points
   class(material), intent(in) :: mt
   integer, intent(in) :: c, nb
   integer :: k
   do k = 1, ntot, nb
-    if (c == 1) then
+    select case (c)
+    case (1)
       call mt%ref(nb, fg(:,:,k), st(:,k), tg(:,k))
-    else
+    case (2)
+      call mt%cur(nb, fg(:,:,k), st(:,k), tg(:,k))
+    case default
       call mt%mix(nb, fg(:,:,k), st(:,k), tg(:,k))
-    end if
+    end select
   end do
   checksum = checksum + tg(1,1)
 end subroutine batches
@@ -132,11 +153,14 @@ subroutine element_sweep(mt, c)
   real(dp) :: r(24), k(24,24)
   integer :: e
   do e = 1, nelem
-    if (c == 1) then
+    select case (c)
+    case (1)
       call elem_ref(q, s, xref(:,:,e), u(:,:,e), mt, r, k)
-    else
+    case (2)
+      call elem_cur(q, s, xref(:,:,e), u(:,:,e), mt, r, k)
+    case default
       call elem_mix(q, s, xref(:,:,e), u(:,:,e), mt, r, k)
-    end if
+    end select
     checksum = checksum + k(1,1)
   end do
 end subroutine element_sweep

@@ -74,6 +74,30 @@ def _ref_point(psi, f, p):
     return s, cc
 
 
+def _cur_point(psi, f, p):
+    # tau = 2 b dPsi/db (isotropic), then J cc from the Lie derivative of tau:
+    # J cc : d = tau' - d tau - tau d with b' = d b + b d, which gives
+    # J cc = 2 sym_kl[(dtau/db) . b] - (I(x)bar tau + I(x)under tau + tau(x)bar I + tau(x)under I)/2.
+    # Only b and tau enter: nothing is pushed forward from the reference configuration.
+    energy = lambda b: psi(*_invariants(b), p)
+
+    def tau(b):
+        g = jax.grad(energy)(b)
+        return 2 * b @ ((g + g.T) / 2)
+
+    b = f @ f.T
+    t = tau(b)
+    d = jax.jacfwd(tau)(b)
+    d = (d + d.transpose(0, 1, 3, 2)) / 2
+    jc = 2 * jnp.einsum("ijkn,nl->ijkl", d, b)
+    jc = (jc + jc.transpose(0, 1, 3, 2)) / 2
+    eye = jnp.eye(3)
+    jc = jc - (jnp.einsum("ik,jl->ijkl", eye, t) + jnp.einsum("il,jk->ijkl", eye, t)
+               + jnp.einsum("ik,jl->ijkl", t, eye) + jnp.einsum("il,jk->ijkl", t, eye)) / 2
+    j = jnp.sqrt(_det3(b))
+    return (t / j)[VI, VJ], jc[VI[:, None], VJ[:, None], VI[None, :], VJ[None, :]] / j
+
+
 def _mix_point(psi, f, p):
     # P = dPsi/dF, AA = d2Psi/dFdF; I1, I2 from C = F^T F, J = det F
     def energy(f):
@@ -87,11 +111,16 @@ def _mix_point(psi, f, p):
     return pk, a.transpose(1, 0, 3, 2).reshape(9, 9)
 
 
-POINT = {"ref": _ref_point, "mix": _mix_point}
+POINT = {"ref": _ref_point, "cur": _cur_point, "mix": _mix_point}
 
 
 def make(model, cfg):
-    """Return run(f, par, stress, tangent) for one model and configuration."""
+    """Return run(f, par, stress, tangent) for one model and configuration.
+
+    cfg "noop" returns a run that does nothing: the bridge round trip without JAX.
+    """
+    if cfg == "noop":
+        return lambda f, par, stress, tangent: None
     psi = PSI[model]
     point = POINT[cfg]
 

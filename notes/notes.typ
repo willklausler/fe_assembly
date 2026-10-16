@@ -48,6 +48,20 @@ $ <eq:A>
   ($A_(i J k L) = A_(k L i J)$); minor symmetry is undefined for a two-point tensor
   (45 independent entries). Its first term, $bold(I) ob bold(S)$, is the geometric stiffness.
 
+== Spatial tangent from $bold(tau)(bold(b))$ (isotropic materials)
+
+For isotropic $Psi(bold(b))$, $bold(tau) = 2 bold(b) dot partial Psi \/ partial bold(b)$. The tangent follows from
+the Lie derivative without any push-forward of $CC$: with $bold(l) = bold(d)$ (spin cancels for an
+isotropic response), $J cc : bold(d) = dot(bold(tau)) - bold(d) bold(tau) - bold(tau) bold(d)$ and
+$dot(bold(b)) = bold(d) bold(b) + bold(b) bold(d)$, so
+$
+J c_(i j k l) = "sym"_(k l) [2 (partial tau_(i j))/(partial b_(k n)) b_(n l)]
+  - 1/2 (delta_(i k) tau_(j l) + delta_(i l) tau_(j k) + tau_(i k) delta_(j l) + tau_(i l) delta_(j k)),
+$
+with $partial bold(tau) \/ partial bold(b)$ symmetrized over its last index pair. The factor $bold(b)$ comes
+from $dot(bold(b))$; the four $bold(tau)$ terms (not two) give the minor symmetry in $i j$. This is how
+`jax/python/fe_jax.py` computes $cc$ by automatic differentiation.
+
 == Element residual and tangent
 
 With $N_(a, J) = partial N_a \/ partial X_J$ and $N_(a, j) = partial N_a \/ partial x_j$:

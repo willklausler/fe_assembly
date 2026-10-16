@@ -7,7 +7,7 @@ program test_jax
   use shapefuncs
   use tensors, only: eye3
   use materials, only: material, material_set
-  use elements, only: elem_ref, elem_mix, shape_gradients
+  use elements, only: elem_ref, elem_cur, elem_mix, shape_gradients
   use jax_materials, only: jax_material, jax_init, jax_set, jax_finalize
   implicit none
   integer :: ncheck = 0, nfail = 0
@@ -42,13 +42,17 @@ program test_jax
   end do
 
   nat = material_set(1.2_dp, 0.8_dp)
-  jx = jax_set(1.2_dp, 0.8_dp, ['ref', 'mix'])
+  jx = jax_set(1.2_dp, 0.8_dp, ['ref', 'cur', 'mix'], 8)
   do m = 1, size(nat)
     id = trim(nat(m)%name) // ' '
     call nat(m)%ref(8, f, s1, c1)
     call jx(m)%ref(8, f, s2, c2)
     call check(close([s2], [s1]), id // 'ref: S, AD = closed form')
     call check(close([c2], [c1]), id // 'ref: CC, AD = closed form')
+    call nat(m)%cur(8, f, s1, c1)
+    call jx(m)%cur(8, f, s2, c2)
+    call check(close([s2], [s1]), id // 'cur: sigma, AD = closed form')
+    call check(close([c2], [c1]), id // 'cur: cc, AD of tau(b) = closed form')
     call nat(m)%mix(8, f, p1, a1)
     call jx(m)%mix(8, f, p2, a2)
     call check(close([p2], [p1]), id // 'mix: P, AD = closed form')
@@ -62,6 +66,9 @@ program test_jax
     call elem_ref(q, s, xref, u, nat(m), r1, k1)
     call elem_ref(q, s, xref, u, jx(m), r2, k2)
     call check(close(r2, r1) .and. close([k2], [k1]), id // 'ref: element R, K with JAX = native')
+    call elem_cur(q, s, xref, u, nat(m), r1, k1)
+    call elem_cur(q, s, xref, u, jx(m), r2, k2)
+    call check(close(r2, r1) .and. close([k2], [k1]), id // 'cur: element R, K with JAX = native')
     call elem_mix(q, s, xref, u, nat(m), r1, k1)
     call elem_mix(q, s, xref, u, jx(m), r2, k2)
     call check(close(r2, r1) .and. close([k2], [k1]), id // 'mix: element R, K with JAX = native')
