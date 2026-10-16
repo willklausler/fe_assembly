@@ -13,7 +13,9 @@ except where "Deviations from the package standard" below says otherwise.
 | `src/` | Library modules (none yet) |
 | `test/test_fe_assembly.f90` | The test program |
 | `app/main.f90` | `volume_check`, the fpm app |
-| `notes/<model>.typ` | Typst derivations: stress and tangent per configuration, element R and K |
+| `notes/notes.typ` | Typst notes: notation, general relations, element R and K; includes the models |
+| `notes/<model>.typ` | Stress and tangent of one material model in the three configurations |
+| `notes/defs.typ` | Shared math symbols, imported by every notes file |
 | `ci.sh` | Local check with every installed compiler |
 | `.github/workflows/ci.yml` | GitHub CI: compiler × OS matrix |
 | `CLAUDE.local.md` | Maintainer's goal and specification; gitignored |
@@ -28,7 +30,7 @@ fpm test --profile debug             # fast check, gfortran
 fpm test --profile release
 fpm run --profile release            # the app
 ./ci.sh                              # gfortran, ifx, nvfortran if installed
-typst compile notes/svk.typ build/notes/svk.pdf   # notes; output is not committed
+typst compile notes/notes.typ build/notes/notes.pdf   # notes; output is not committed
 ```
 
 Done means: the tests pass for every compiler you have in both profiles, and
@@ -39,7 +41,7 @@ the app runs.
 - Kinds come from `iso_fortran_env`; all reals are `real64`.
 - Shape functions and cubatures come from fortran_shapefuncs and fortran_cubatures, pinned by tag.
 - Error policy: `error stop` with a message that starts with the procedure name.
-- Tensor notation follows Holzapfel, with fourth-order products defined by index in `notes/svk.typ`:
+- Tensor notation follows Holzapfel, with fourth-order products defined by index in `notes/notes.typ`:
   `(A ⊗̄ B)_ijkl = A_ik B_jl`, `(A ⊗̲ B)_ijkl = A_il B_jk`.
 
 ## Deviations from the package standard
