@@ -15,7 +15,9 @@ fe_assembly = { path = ".." }
 [features]
 debug.gfortran.flags = "-g -Wall -fbacktrace -fcheck=all -Wextra -Wimplicit-interface -finit-real=snan"
 debug.ifx.linux.flags = "-g -check all -warn all -traceback -fpe0"
-release.gfortran.flags = "-O3 -fbacktrace -march=native -funroll-loops"
+# -fstack-arrays added: gfortran otherwise mallocs every automatic array (the element kernels'
+# s%nnodes-sized scratch) on each call; ifx and nvfortran use the stack by default
+release.gfortran.flags = "-O3 -fbacktrace -march=native -funroll-loops -fstack-arrays"
 release.ifx.linux.flags = "-O3 -xHost -unroll"
 
 [profiles]

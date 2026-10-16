@@ -21,7 +21,9 @@ debug.ifx.windows.flags = "/Zi /check:all /warn:all /traceback /fpe:0 /Qinit:sna
 debug.nvfortran.flags = "-g -Minform=inform -Mbounds -Mchkstk -Mstandard -Ktrap=fp -traceback"
 debug.flang.flags = "-g"
 
-release.gfortran.flags = "-O3 -fbacktrace -march=native -funroll-loops"
+# -fstack-arrays added: gfortran otherwise mallocs every automatic array (the element kernels'
+# s%nnodes-sized scratch) on each call; ifx and nvfortran use the stack by default
+release.gfortran.flags = "-O3 -fbacktrace -march=native -funroll-loops -fstack-arrays"
 release.ifx.linux.flags = "-O3 -xHost -unroll"
 release.ifx.windows.flags = "/O3 /QxHost /Qunroll"
 release.nvfortran.flags = "-Mrecursive -fast"

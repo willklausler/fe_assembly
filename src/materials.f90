@@ -135,67 +135,80 @@ end function material_set
 !-----------------------------------------------------------------------
 ! Fourth-order products in Voigt (6x6) and two-point (9x9) storage
 !-----------------------------------------------------------------------
+! Each adds coef times a product into the tangent in place: array-valued helpers
+! inside long expressions made gfortran malloc a 6x6 or 9x9 temporary per term.
 
-pure function outer6(a, b) result(c)
-  ! A (x) B of symmetric A, B
-  real(dp), intent(in) :: a(3,3), b(3,3)
-  real(dp) :: c(6,6), va(6), vb(6)
-  integer :: k
-  va = voigt(a)
-  vb = voigt(b)
-  do k = 1, 6
-    c(:,k) = va*vb(k)
+pure subroutine add_outer6(c, coef, a, b)
+  ! c += coef A (x) B, A and B symmetric
+  real(dp), intent(inout) :: c(6,6)
+  real(dp), intent(in) :: coef, a(3,3), b(3,3)
+  integer :: k, l
+  do l = 1, 6
+    do k = 1, 6
+      c(k,l) = c(k,l) + coef*a(vi(k), vj(k))*b(vi(l), vj(l))
+    end do
   end do
-end function outer6
+end subroutine add_outer6
 
-pure function isym(a) result(c)
-  ! II_A = (A (x)bar A + A (x)under A)/2
-  real(dp), intent(in) :: a(3,3)
-  real(dp) :: c(6,6)
-  c = iso4(a, 0._dp, 0.5_dp)
-end function isym
-
-pure function outer9(a, b) result(c)
-  ! (A (x) B)_iJkL = A_iJ B_kL
-  real(dp), intent(in) :: a(3,3), b(3,3)
-  real(dp) :: c(9,9)
-  integer :: s
-  do s = 1, 9
-    c(:,s) = reshape(a, [9])*b(mod(s - 1, 3) + 1, (s - 1)/3 + 1)
+pure subroutine add_isym6(c, coef, a)
+  ! c += coef II_A, II_A = (A (x)bar A + A (x)under A)/2, A symmetric
+  real(dp), intent(inout) :: c(6,6)
+  real(dp), intent(in) :: coef, a(3,3)
+  integer :: k, l
+  do l = 1, 6
+    do k = 1, 6
+      c(k,l) = c(k,l) + coef*(a(vi(k), vi(l))*a(vj(k), vj(l)) + a(vi(k), vj(l))*a(vj(k), vi(l)))/2
+    end do
   end do
-end function outer9
+end subroutine add_isym6
 
-pure function over9(a, b) result(c)
-  ! (A (x)bar B)_iJkL = A_ik B_JL
-  real(dp), intent(in) :: a(3,3), b(3,3)
-  real(dp) :: c(9,9)
+pure subroutine add_outer9(m, coef, a, b)
+  ! m += coef A (x) B: (A (x) B)_iJkL = A_iJ B_kL
+  real(dp), intent(inout) :: m(9,9)
+  real(dp), intent(in) :: coef, a(3,3), b(3,3)
   integer :: i, jj, k, l
   do l = 1, 3
     do k = 1, 3
       do jj = 1, 3
         do i = 1, 3
-          c(i + 3*(jj - 1), k + 3*(l - 1)) = a(i,k)*b(jj,l)
+          m(i + 3*(jj - 1), k + 3*(l - 1)) = m(i + 3*(jj - 1), k + 3*(l - 1)) + coef*a(i,jj)*b(k,l)
         end do
       end do
     end do
   end do
-end function over9
+end subroutine add_outer9
 
-pure function under9(a, b) result(c)
-  ! (A (x)under B)_iJkL = A_iL B_Jk
-  real(dp), intent(in) :: a(3,3), b(3,3)
-  real(dp) :: c(9,9)
+pure subroutine add_over9(m, coef, a, b)
+  ! m += coef A (x)bar B: (A (x)bar B)_iJkL = A_ik B_JL
+  real(dp), intent(inout) :: m(9,9)
+  real(dp), intent(in) :: coef, a(3,3), b(3,3)
   integer :: i, jj, k, l
   do l = 1, 3
     do k = 1, 3
       do jj = 1, 3
         do i = 1, 3
-          c(i + 3*(jj - 1), k + 3*(l - 1)) = a(i,l)*b(jj,k)
+          m(i + 3*(jj - 1), k + 3*(l - 1)) = m(i + 3*(jj - 1), k + 3*(l - 1)) + coef*a(i,k)*b(jj,l)
         end do
       end do
     end do
   end do
-end function under9
+end subroutine add_over9
+
+pure subroutine add_under9(m, coef, a, b)
+  ! m += coef A (x)under B: (A (x)under B)_iJkL = A_iL B_Jk
+  real(dp), intent(inout) :: m(9,9)
+  real(dp), intent(in) :: coef, a(3,3), b(3,3)
+  integer :: i, jj, k, l
+  do l = 1, 3
+    do k = 1, 3
+      do jj = 1, 3
+        do i = 1, 3
+          m(i + 3*(jj - 1), k + 3*(l - 1)) = m(i + 3*(jj - 1), k + 3*(l - 1)) + coef*a(i,l)*b(jj,k)
+        end do
+      end do
+    end do
+  end do
+end subroutine add_under9
 
 pure function detf(f, caller) result(j)
   ! det F, stopping on an inverted element
@@ -294,7 +307,9 @@ pure subroutine nh_ref(f, par, s, c)
   lnj = log(detf(f, 'nh_ref'))
   ci = inv3(matmul(transpose(f), f))
   s = voigt(par(2)*(eye3 - ci) + par(1)*lnj*ci)
-  c = par(1)*outer6(ci, ci) + 2*(par(2) - par(1)*lnj)*isym(ci)
+  c = 0
+  call add_outer6(c, par(1), ci, ci)
+  call add_isym6(c, 2*(par(2) - par(1)*lnj), ci)
 end subroutine nh_ref
 
 pure subroutine nh_cur(f, par, s, c)
@@ -317,7 +332,10 @@ pure subroutine nh_mix(f, par, p, a)
   fi = inv3(f)
   fit = transpose(fi)
   p = par(2)*(f - fit) + par(1)*lnj*fit
-  a = par(2)*over9(eye3, eye3) + (par(2) - par(1)*lnj)*under9(fit, fi) + par(1)*outer9(fit, fit)
+  a = 0
+  call add_over9(a, par(2), eye3, eye3)
+  call add_under9(a, par(2) - par(1)*lnj, fit, fi)
+  call add_outer9(a, par(1), fit, fit)
 end subroutine nh_mix
 
 !=======================================================================
@@ -345,8 +363,11 @@ pure subroutine mnh_ref(f, par, s, c)
   g = par(2)*j**(-2._dp/3)
   siso = g*(eye3 - i1/3*ci)
   s = voigt(j*p*ci + siso)
-  c = j*pt*outer6(ci, ci) - 2*j*p*isym(ci) + 2*g*i1/3*(isym(ci) - outer6(ci, ci)/3) &
-    & - 2*(outer6(ci, siso) + outer6(siso, ci))/3
+  c = 0
+  call add_outer6(c, j*pt - 2*g*i1/9, ci, ci)
+  call add_isym6(c, -2*j*p + 2*g*i1/3, ci)
+  call add_outer6(c, -2._dp/3, ci, siso)
+  call add_outer6(c, -2._dp/3, siso, ci)
 end subroutine mnh_ref
 
 pure subroutine mnh_cur(f, par, s, c)
@@ -361,9 +382,11 @@ pure subroutine mnh_cur(f, par, s, c)
   trbb = bb(1,1) + bb(2,2) + bb(3,3)
   tiso = par(2)*(bb - trbb/3*eye3)
   s = voigt(p*eye3 + tiso/j)
-  c = pt*outer6(eye3, eye3) - 2*p*isym(eye3) &
-    & + (2*par(2)*trbb/3*(isym(eye3) - outer6(eye3, eye3)/3) &
-    &    - 2*(outer6(eye3, tiso) + outer6(tiso, eye3))/3)/j
+  c = 0
+  call add_outer6(c, pt - 2*par(2)*trbb/(9*j), eye3, eye3)
+  call add_isym6(c, -2*p + 2*par(2)*trbb/(3*j), eye3)
+  call add_outer6(c, -2/(3*j), eye3, tiso)
+  call add_outer6(c, -2/(3*j), tiso, eye3)
 end subroutine mnh_cur
 
 pure subroutine mnh_mix(f, par, p, a)
@@ -379,9 +402,12 @@ pure subroutine mnh_mix(f, par, p, a)
   pt = par(1)*j
   g = par(2)*j**(-2._dp/3)
   p = j*pr*fit + g*(f - i1/3*fit)
-  a = j*pt*outer9(fit, fit) - j*pr*under9(fit, fi) &
-    & + g*(over9(eye3, eye3) + i1/3*under9(fit, fi) - 2*(outer9(fit, f) + outer9(f, fit))/3 &
-    &      + 2*i1/9*outer9(fit, fit))
+  a = 0
+  call add_outer9(a, j*pt + 2*g*i1/9, fit, fit)
+  call add_under9(a, -j*pr + g*i1/3, fit, fi)
+  call add_over9(a, g, eye3, eye3)
+  call add_outer9(a, -2*g/3, fit, f)
+  call add_outer9(a, -2*g/3, f, fit)
 end subroutine mnh_mix
 
 !=======================================================================
@@ -404,7 +430,7 @@ pure subroutine mr_ref(f, par, s, c)
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
   real(dp) :: cg(3,3), ci(3,3), cb(3,3), sbar(3,3), siso(3,3), d1(3,3)
-  real(dp) :: j, j23, i1, p, pt, scc
+  real(dp) :: j, j23, i1, p, pt, scc, k4, k2
   j = detf(f, 'mr_ref')
   j23 = j**(-2._dp/3)
   cg = matmul(transpose(f), f)
@@ -418,17 +444,25 @@ pure subroutine mr_ref(f, par, s, c)
   siso = j23*(sbar - scc/3*ci)
   s = voigt(j*p*ci + siso)
   d1 = eye3 - i1/3*ci
-  c = j*pt*outer6(ci, ci) - 2*j*p*isym(ci) &
-    & + 4*par(2)*j23**2*(outer6(d1, d1) - isym(eye3) + (outer6(ci, cg) + outer6(cg, ci))/3 &
-    &                    - sum(cg*cg)/9*outer6(ci, ci)) &
-    & + 2*j23*scc/3*(isym(ci) - outer6(ci, ci)/3) - 2*(outer6(ci, siso) + outer6(siso, ci))/3
+  ! k4 multiplies P : CCbar : P^T, k2 the trace term
+  k4 = 4*par(2)*j23**2
+  k2 = 2*j23*scc/3
+  c = 0
+  call add_outer6(c, j*pt - k4*sum(cg*cg)/9 - k2/3, ci, ci)
+  call add_isym6(c, -2*j*p + k2, ci)
+  call add_outer6(c, k4, d1, d1)
+  call add_isym6(c, -k4, eye3)
+  call add_outer6(c, k4/3, ci, cg)
+  call add_outer6(c, k4/3, cg, ci)
+  call add_outer6(c, -2._dp/3, ci, siso)
+  call add_outer6(c, -2._dp/3, siso, ci)
 end subroutine mr_ref
 
 pure subroutine mr_cur(f, par, s, c)
   !! sigma and cc; the projection P : ccbar : P is expanded in closed form
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
-  real(dp) :: bb(3,3), bb2(3,3), tbar(3,3), tiso(3,3), dbb(3,3), j, p, pt, i1b, trt
+  real(dp) :: bb(3,3), bb2(3,3), tbar(3,3), tiso(3,3), dbb(3,3), j, p, pt, i1b, trt, k4, k2
   j = detf(f, 'mr_cur')
   p = par(3)/2*(j - 1/j)
   pt = par(3)*j
@@ -440,38 +474,53 @@ pure subroutine mr_cur(f, par, s, c)
   tiso = tbar - trt/3*eye3
   dbb = bb - i1b/3*eye3
   s = voigt(p*eye3 + tiso/j)
-  c = pt*outer6(eye3, eye3) - 2*p*isym(eye3) &
-    & + (4*par(2)*(outer6(dbb, dbb) - isym(bb) + (outer6(eye3, bb2) + outer6(bb2, eye3))/3 &
-    &              - (bb2(1,1) + bb2(2,2) + bb2(3,3))/9*outer6(eye3, eye3)) &
-    &    + 2*trt/3*(isym(eye3) - outer6(eye3, eye3)/3) &
-    &    - 2*(outer6(eye3, tiso) + outer6(tiso, eye3))/3)/j
+  ! k4 multiplies P : ccbar : P, k2 the trace term
+  k4 = 4*par(2)/j
+  k2 = 2*trt/(3*j)
+  c = 0
+  call add_outer6(c, pt - k4*(bb2(1,1) + bb2(2,2) + bb2(3,3))/9 - k2/3, eye3, eye3)
+  call add_isym6(c, -2*p + k2, eye3)
+  call add_outer6(c, k4, dbb, dbb)
+  call add_isym6(c, -k4, bb)
+  call add_outer6(c, k4/3, eye3, bb2)
+  call add_outer6(c, k4/3, bb2, eye3)
+  call add_outer6(c, -2/(3*j), eye3, tiso)
+  call add_outer6(c, -2/(3*j), tiso, eye3)
 end subroutine mr_cur
 
 pure subroutine mr_mix(f, par, p, a)
   !! P and AA
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: p(3,3), a(9,9)
-  real(dp) :: fi(3,3), fit(3,3), b(3,3), cg(3,3), gi2(3,3), j, j23, j43, i1, i2, pr, pt
+  real(dp) :: fi(3,3), fit(3,3), ft(3,3), b(3,3), cg(3,3), gi2(3,3), j, j23, j43, i1, i2, pr, pt, a1, a2
   j = detf(f, 'mr_mix')
   j23 = j**(-2._dp/3)
   j43 = j23**2
   fi = inv3(f)
   fit = transpose(fi)
-  b = matmul(f, transpose(f))
-  cg = matmul(transpose(f), f)
+  ft = transpose(f)
+  b = matmul(f, ft)
+  cg = matmul(ft, f)
   i1 = b(1,1) + b(2,2) + b(3,3)
   i2 = (i1**2 - sum(b*b))/2
   gi2 = 2*(i1*f - matmul(b, f))
   pr = par(3)/2*(j - 1/j)
   pt = par(3)*j
   p = j*pr*fit + par(1)*j23*(2*f - 2*i1/3*fit) + par(2)*j43*(gi2 - 4*i2/3*fit)
-  a = j*pt*outer9(fit, fit) - j*pr*under9(fit, fi) &
-    & + par(1)*j23*(2*over9(eye3, eye3) + 2*i1/3*under9(fit, fi) &
-    &               - 4*(outer9(fit, f) + outer9(f, fit))/3 + 4*i1/9*outer9(fit, fit)) &
-    & + par(2)*j43*(2*i1*over9(eye3, eye3) + 4*outer9(f, f) &
-    &               - 2*(over9(eye3, cg) + under9(f, transpose(f)) + over9(b, eye3)) &
-    &               - 4*(outer9(fit, gi2) + outer9(gi2, fit))/3 &
-    &               + 4*i2/3*under9(fit, fi) + 16*i2/9*outer9(fit, fit))
+  a1 = par(1)*j23
+  a2 = par(2)*j43
+  a = 0
+  call add_outer9(a, j*pt + 4*a1*i1/9 + 16*a2*i2/9, fit, fit)
+  call add_under9(a, -j*pr + 2*a1*i1/3 + 4*a2*i2/3, fit, fi)
+  call add_over9(a, 2*a1 + 2*a2*i1, eye3, eye3)
+  call add_outer9(a, -4*a1/3, fit, f)
+  call add_outer9(a, -4*a1/3, f, fit)
+  call add_outer9(a, 4*a2, f, f)
+  call add_over9(a, -2*a2, eye3, cg)
+  call add_under9(a, -2*a2, f, ft)
+  call add_over9(a, -2*a2, b, eye3)
+  call add_outer9(a, -4*a2/3, fit, gi2)
+  call add_outer9(a, -4*a2/3, gi2, fit)
 end subroutine mr_mix
 
 end module materials
