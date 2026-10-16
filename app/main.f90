@@ -7,6 +7,7 @@ program bench
   use shapefuncs, only: shapefunc
   use tensors, only: eye3
   use materials, only: material, material_set
+  use materials_ad, only: material_set_ad
   use elements, only: elem_ref, elem_cur, elem_mix, shape_gradients
   implicit none
   character(*), parameter :: cfgname(3) = ['ref', 'cur', 'mix']
@@ -22,7 +23,12 @@ program bench
   call int_arg(2, ntrial)
   q = cubature(CUB_HEX, 2)
   s = shapefunc(q, 1)
-  mats = material_set(1.2_dp, 0.8_dp)
+  ! hand-derived models, then the same models exported from JAX
+  ! sections, not an array constructor: gfortran 14 leaks the allocatable components
+  ! of function results inside [ ... ]
+  allocate(mats(8))
+  mats(1:4) = material_set(1.2_dp, 0.8_dp)
+  mats(5:8) = material_set_ad(1.2_dp, 0.8_dp)
 
   ! Distinct distorted elements under moderate deformation, so no two calls
   ! see the same data; F at every point feeds the material-only timing.

@@ -7,10 +7,13 @@ program test_fe_assembly
   use shapefuncs
   use tensors, only: eye3, det3, inv3
   use materials, only: material, material_set
+  use materials_ad, only: material_set_ad
   use elements, only: elem_ref, elem_cur, elem_mix, shape_gradients
   implicit none
   integer :: ncheck = 0, nfail = 0
   real(dp), parameter :: eps = epsilon(1._dp), tol = 64*eps, fdtol = 64*sqrt(eps)
+  ! JAX-exported and hand-derived tangents round differently; both are exact derivatives
+  real(dp), parameter :: adtol = 1024*eps
   ! Central differences: h ~ eps**(1/3) balances truncation and rounding
   real(dp), parameter :: h = 1e-5_dp
   character(*), parameter :: cfgname(3) = ['ref', 'cur', 'mix']
@@ -19,7 +22,7 @@ program test_fe_assembly
   type(material), allocatable :: mats(:)
   type(material) :: mat
   real(dp) :: xref(3,8), u(3,8), urot(3,8), rot(3,3), w(3,3), jac(3,3), vol(2)
-  real(dp) :: r(24,3), k(24,24,3), rfd(24), kfd(24,24), up(3,8), rp(24), rm(24), kk(24,24), k0(24,24)
+  real(dp) :: rnat(24,3,4), knat(24,24,3,4), r(24,3), k(24,24,3), rfd(24), kfd(24,24), up(3,8), rp(24), rm(24), kk(24,24), k0(24,24)
   integer :: c, i, j, a, m, g
   character(:), allocatable :: id
 
@@ -58,12 +61,24 @@ program test_fe_assembly
   urot = matmul(rot - eye3, xref)
 
   ! Every material in every configuration ---------------------------------
-  mats = material_set(1.2_dp, 0.8_dp)
+  ! the hand-derived models, then the same four exported from JAX (materials_ad)
+  ! sections, not an array constructor: gfortran 14 leaks the allocatable components
+  ! of function results inside [ ... ]
+  allocate(mats(8))
+  mats(1:4) = material_set(1.2_dp, 0.8_dp)
+  mats(5:8) = material_set_ad(1.2_dp, 0.8_dp)
   do m = 1, size(mats)
     mat = mats(m)
     do c = 1, 3
       call assemble(c, u, r(:,c), k(:,:,c))
     end do
+    if (m <= 4) then
+      rnat(:,:,m) = r
+      knat(:,:,:,m) = k
+    else
+      call check(close([r], [rnat(:,:,m-4)], adtol) .and. close([k], [knat(:,:,:,m-4)], adtol), &
+        & trim(mat%name) // ': R, K equal the hand-derived ' // trim(mats(m-4)%name) // ' in every configuration')
+    end if
     do j = 1, 24
       up = u
       call bump(up, j, h)

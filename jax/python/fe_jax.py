@@ -62,19 +62,26 @@ def _invariants(x):
     return i1, (i1**2 - jnp.trace(x @ x)) / 2, jnp.sqrt(_det3(x))
 
 
-def _ref_point(psi, f, p):
+def _ref_full(psi, f, p):
     # S = 2 sym(dPsi/dC), CC = 4 sym(d2Psi/dCdC): AD treats the 9 entries of C as independent
     energy = lambda c: psi(*_invariants(c), p)
     c = f.T @ f
     g = jax.grad(energy)(c)
     h = jax.hessian(energy)(c)
     h = (h + h.transpose(1, 0, 2, 3) + h.transpose(0, 1, 3, 2) + h.transpose(1, 0, 3, 2)) / 4
-    s = (g + g.T)[VI, VJ]
-    cc = 4 * h[VI[:, None], VJ[:, None], VI[None, :], VJ[None, :]]
-    return s, cc
+    return g + g.T, 4 * h
 
 
-def _cur_point(psi, f, p):
+def _voigt(full):
+    # full stress and tangent -> Voigt (gather); export_fortran.py maps full tensors itself
+    def point(psi, f, p):
+        s, c = full(psi, f, p)
+        return s[VI, VJ], c[VI[:, None], VJ[:, None], VI[None, :], VJ[None, :]]
+
+    return point
+
+
+def _cur_full(psi, f, p):
     # tau = 2 b dPsi/db (isotropic), then J cc from the Lie derivative of tau:
     # J cc : d = tau' - d tau - tau d with b' = d b + b d, which gives
     # J cc = 2 sym_kl[(dtau/db) . b] - (I(x)bar tau + I(x)under tau + tau(x)bar I + tau(x)under I)/2.
@@ -95,7 +102,7 @@ def _cur_point(psi, f, p):
     jc = jc - (jnp.einsum("ik,jl->ijkl", eye, t) + jnp.einsum("il,jk->ijkl", eye, t)
                + jnp.einsum("ik,jl->ijkl", t, eye) + jnp.einsum("il,jk->ijkl", t, eye)) / 2
     j = jnp.sqrt(_det3(b))
-    return (t / j)[VI, VJ], jc[VI[:, None], VJ[:, None], VI[None, :], VJ[None, :]] / j
+    return t / j, jc / j
 
 
 def _mix_point(psi, f, p):
@@ -111,7 +118,9 @@ def _mix_point(psi, f, p):
     return pk, a.transpose(1, 0, 3, 2).reshape(9, 9)
 
 
-POINT = {"ref": _ref_point, "cur": _cur_point, "mix": _mix_point}
+# full tensors per configuration: (S, CC), (sigma, cc) as 3x3, 3x3x3x3; (P, AA) as 3x3, 9x9
+FULL = {"ref": _ref_full, "cur": _cur_full, "mix": _mix_point}
+POINT = {"ref": _voigt(_ref_full), "cur": _voigt(_cur_full), "mix": _mix_point}
 
 
 def make(model, cfg):

@@ -12,6 +12,7 @@ except where "Deviations from the package standard" below says otherwise.
 |---|---|
 | `src/tensors.f90` | 3x3 helpers (`det3`, `inv3`) and the Voigt index map |
 | `src/materials.f90` | Stress and tangent per model (`svk`, `nh`, `mnh`, `mr`) and configuration (`_ref/_cur/_mix`); `material_set` |
+| `src/materials_ad.f90` | **Generated, never edit.** The same four models differentiated by JAX and exported as Fortran (`material_set_ad`); regenerate with `jax/python/export_fortran.py` |
 | `src/elements.f90` | Element R and K per configuration (`elem_ref/_cur/_mix`) |
 | `test/test_fe_assembly.f90` | The test program |
 | `app/main.f90` | `bench`, the fpm app: times element R and K and the material call alone |
@@ -41,6 +42,7 @@ perf stat -e cycles,instructions $(fpm run --profile release --runner echo)   # 
 valgrind $(fpm run --profile release --runner echo) 100 1                     # heap allocations
 ./ci.sh                              # gfortran, ifx, nvfortran if installed
 typst compile notes/notes.typ build/notes/notes.pdf   # notes; output is not committed
+(cd jax && ../.venv/bin/python python/export_fortran.py)   # regenerate src/materials_ad.f90 after editing an energy
 jax/run.sh test --profile release    # JAX paradigm: AD against closed forms (needs ../.venv with jax)
 jax/run.sh run --profile release     # native versus JAX: JIT, batch 1 / 8 / mesh, element
 (cd socket && fpm test)              # socket paradigm: starts python/server.py on port 65400
@@ -74,6 +76,9 @@ the app runs.
   implement it by looping over per-point routines (`voigt_material`, `twopoint_material`
   interfaces); other paradigms extend type `material` and override only these three methods, so
   the element loop is identical across paradigms and only the material call changes.
+- `src/materials_ad.f90` is generated from `jax/python/fe_jax.py` and committed, like fypp output
+  in the package standard: CI has no JAX, so it compiles the committed file and does not check it
+  is current. Regenerate and commit it with every energy change.
 - Every tangent is tested by central differences of the residual, and every residual by central
   differences of the element energy; R and K must agree across the three configurations.
 
