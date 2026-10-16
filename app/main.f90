@@ -5,6 +5,7 @@ program volume_check
   use, intrinsic :: iso_fortran_env, only: dp => real64
   use cubatures, only: cubature, CUB_HEX
   use shapefuncs, only: shapefunc
+  use tensors, only: det3
   implicit none
   integer, parameter :: ncase = 4
   character(*), parameter :: names(ncase) = [character(16) :: 'identity', 'uniaxial 1.5', &
@@ -36,14 +37,5 @@ program volume_check
     end do
     write(*, '(a16, 2f12.6)') names(c), det3(f(:,:,c)), v
   end do
-
-contains
-
-pure function det3(a) result(d)
-  real(dp), intent(in) :: a(3,3)
-  real(dp) :: d
-  d = a(1,1)*(a(2,2)*a(3,3) - a(2,3)*a(3,2)) - a(1,2)*(a(2,1)*a(3,3) - a(2,3)*a(3,1)) &
-    & + a(1,3)*(a(2,1)*a(3,2) - a(2,2)*a(3,1))
-end function det3
 
 end program volume_check

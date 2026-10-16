@@ -10,7 +10,9 @@ except where "Deviations from the package standard" below says otherwise.
 
 | Path | Role |
 |---|---|
-| `src/` | Library modules (none yet) |
+| `src/tensors.f90` | 3x3 helpers (`det3`, `inv3`) and the Voigt index map |
+| `src/materials.f90` | Stress and tangent per model and configuration (`<model>_ref/_cur/_mix`) |
+| `src/elements.f90` | Element R and K per configuration (`elem_ref/_cur/_mix`) |
 | `test/test_fe_assembly.f90` | The test program |
 | `app/main.f90` | `volume_check`, the fpm app |
 | `notes/notes.typ` | Typst notes: notation, general relations, element R and K; includes the models |
@@ -43,6 +45,17 @@ the app runs.
 - Error policy: `error stop` with a message that starts with the procedure name.
 - Tensor notation follows Holzapfel, with fourth-order products defined by index in `notes/notes.typ`:
   `(A ⊗̄ B)_ijkl = A_ik B_jl`, `(A ⊗̲ B)_ijkl = A_il B_jk`.
+- Each configuration uses its natural storage: Voigt 6 and 6x6 for the reference (S, CC) and
+  current (sigma, cc) configurations, 3x3 and 9x9 for the two-point one (P, AA).
+- Voigt order 11, 22, 33, 12, 23, 13. Stress-like vectors hold components; strain-like vectors hold
+  2 E_12 etc., so 6x6 tangents hold tensor components unscaled and the factor 2 lives in the shear
+  rows of the B-matrix. Two-point index (i, J) -> i + 3 (J - 1), column-major.
+- Element dof order: node, then direction, `3 (a - 1) + i`.
+- Material routines share one interface per storage scheme (`voigt_material`, `twopoint_material`):
+  `(F, par, stress, tangent)`, so the element loop is identical across evaluation paradigms and only
+  the material call changes.
+- Every tangent is tested by central differences of the residual, and every residual by central
+  differences of the element energy; R and K must agree across the three configurations.
 
 ## Deviations from the package standard
 
@@ -54,6 +67,7 @@ the app runs.
 
 - Debug profiles trap floating-point exceptions (ifx `-fpe0`, nvfortran `-Ktrap=fp`): tests must not create NaN or Inf through arithmetic, nor compare NaN with `<`. Use `ieee_value` and `ieee_is_nan`.
 - Use tolerances relative to `epsilon(1._dp)` (`tol = 64*eps`); `-O3` changes the last bits.
+  Finite-difference checks use `fdtol = 64*sqrt(eps)` with step `h = 1e-5`.
 - Tests must run clean under AddressSanitizer and UBSan (gfortran and ifx debug on Linux).
 
 ## Commits
