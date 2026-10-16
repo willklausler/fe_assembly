@@ -7,7 +7,7 @@ program bench
   use shapefuncs, only: shapefunc
   use tensors, only: eye3
   use materials, only: material, material_set
-  use elements, only: elem_ref, elem_cur, elem_mix, ref_gradients
+  use elements, only: elem_ref, elem_cur, elem_mix, shape_gradients
   implicit none
   character(*), parameter :: cfgname(3) = ['ref', 'cur', 'mix']
   integer :: nelem = 2000, ntrial = 7
@@ -35,7 +35,7 @@ program bench
       end do
     end do
     do g = 1, q%npoints
-      call ref_gradients(q, s, g, xref(:,:,e), dndx, dv)
+      call shape_gradients(q, s, g, xref(:,:,e), dndx, dv)
       fg(:,:,g,e) = eye3 + matmul(u(:,:,e), transpose(dndx))
     end do
   end do

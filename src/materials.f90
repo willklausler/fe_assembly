@@ -265,12 +265,12 @@ pure subroutine nh_mix(f, par, p, a)
   !! P and AA
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: p(3,3), a(9,9)
-  real(dp) :: fi(3,3), lnj
+  real(dp) :: fi(3,3), fit(3,3), lnj
   lnj = log(detf(f, 'nh_mix'))
   fi = inv3(f)
-  p = par(2)*(f - transpose(fi)) + par(1)*lnj*transpose(fi)
-  a = par(2)*over9(eye3, eye3) + (par(2) - par(1)*lnj)*under9(transpose(fi), fi) &
-    & + par(1)*outer9(transpose(fi), transpose(fi))
+  fit = transpose(fi)
+  p = par(2)*(f - fit) + par(1)*lnj*fit
+  a = par(2)*over9(eye3, eye3) + (par(2) - par(1)*lnj)*under9(fit, fi) + par(1)*outer9(fit, fit)
 end subroutine nh_mix
 
 !=======================================================================

@@ -7,7 +7,7 @@ program test_fe_assembly
   use shapefuncs
   use tensors, only: eye3, det3, inv3
   use materials, only: material, material_set
-  use elements, only: elem_ref, elem_cur, elem_mix, ref_gradients
+  use elements, only: elem_ref, elem_cur, elem_mix, shape_gradients
   implicit none
   integer :: ncheck = 0, nfail = 0
   real(dp), parameter :: eps = epsilon(1._dp), tol = 64*eps, fdtol = 64*sqrt(eps)
@@ -149,7 +149,7 @@ function energy(uu) result(pi)
   integer :: g
   pi = 0
   do g = 1, q%npoints
-    call ref_gradients(q, s, g, xref, dndx, dv)
+    call shape_gradients(q, s, g, xref, dndx, dv)
     pi = pi + mat%energy(eye3 + matmul(uu, transpose(dndx)), mat%par)*dv
   end do
 end function energy

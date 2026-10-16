@@ -48,6 +48,12 @@ the app runs.
 - Error policy: `error stop` with a message that starts with the procedure name.
 - Tensor notation follows Holzapfel, with fourth-order products defined by index in `notes/notes.typ`:
   `(A ⊗̄ B)_ijkl = A_ik B_jl`, `(A ⊗̲ B)_ijkl = A_il B_jk`.
+- Each configuration is computed discretely in its own quantities: no code pushes forward or
+  pulls back from another configuration. The updated Lagrangian element takes dN/dx and dv from
+  the current coordinates and F from F^-1 = I - du/dx. Equality of R and K across configurations
+  is a test, never an implementation shortcut.
+- Kernels for different configurations are written in the same style (explicit fixed-length
+  loops), so timing differences come from the algorithm, not the coding.
 - Each configuration uses its natural storage: Voigt 6 and 6x6 for the reference (S, CC) and
   current (sigma, cc) configurations, 3x3 and 9x9 for the two-point one (P, AA).
 - Voigt order 11, 22, 33, 12, 23, 13. Stress-like vectors hold components; strain-like vectors hold

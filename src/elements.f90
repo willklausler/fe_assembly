@@ -16,34 +16,35 @@ module elements
   implicit none
   private
 
-  public :: elem_ref, elem_cur, elem_mix, ref_gradients
+  public :: elem_ref, elem_cur, elem_mix, shape_gradients
 
 contains
 
-pure subroutine ref_gradients(q, s, g, xref, dndx, dv)
-  !! dN/dX and the reference volume weight at cubature point g
+pure subroutine shape_gradients(q, s, g, x, dndx, dv)
+  !! dN/dx and the volume weight at cubature point g, for nodal coordinates x
+  !! (reference coordinates give dN/dX and dV)
   type(cubature), intent(in) :: q
   type(shapefunc), intent(in) :: s
   integer, intent(in) :: g
-  real(dp), intent(in) :: xref(:,:)
+  real(dp), intent(in) :: x(:,:)
   real(dp), intent(out) :: dndx(:,:), dv
   real(dp) :: jac(3,3), ji(3,3)
   integer :: a, jj
   jac = 0
   do a = 1, s%nnodes
     do jj = 1, 3
-      jac(:,jj) = jac(:,jj) + xref(:,a)*s%derv(jj,a,g)
+      jac(:,jj) = jac(:,jj) + x(:,a)*s%derv(jj,a,g)
     end do
   end do
   ji = inv3(jac)
   dv = det3(jac)*q%weights(g)
-  ! dN/dX_J = sum_k (J^-1)_kJ dN/dxi_k
+  ! dN/dx_j = sum_k (J^-1)_kj dN/dxi_k
   do a = 1, s%nnodes
     do jj = 1, 3
       dndx(jj,a) = sum(ji(:,jj)*s%derv(:,a,g))
     end do
   end do
-end subroutine ref_gradients
+end subroutine shape_gradients
 
 pure function grad_u(u, dndx) result(f)
   ! F = I + u dN^T
@@ -76,30 +77,44 @@ end subroutine bmatrix
 
 pure subroutine add_voigt(bm, dndx, sv, cv, dv, r, k)
   ! r += B^T s dv; upper blocks of k += (B_a^T C B_b + I dN_a . S . dN_b) dv
-  real(dp), intent(in) :: bm(:,:), dndx(:,:), sv(6), cv(6,6), dv
-  real(dp), intent(inout) :: r(:), k(:,:)
-  real(dp) :: cb(6,3), sd(3), sm(3,3)
-  integer :: a, b, i, kk, v, ia, ib
+  ! Explicit fixed-length loops, written like elem_mix, so configurations differ by algorithm only.
+  real(dp), intent(in), contiguous :: bm(:,:), dndx(:,:)
+  real(dp), intent(in) :: sv(6), cv(6,6), dv
+  real(dp), intent(inout), contiguous :: r(:), k(:,:)
+  real(dp) :: cb(6,3), sd(3), sm(3,3), t
+  integer :: a, b, i, kk, v, z, ia, ib
   sm = reshape([sv(1), sv(4), sv(6), sv(4), sv(2), sv(5), sv(6), sv(5), sv(3)], [3, 3])
   do i = 1, size(r)
-    r(i) = r(i) + sum(bm(:,i)*sv)*dv
+    t = 0
+    do v = 1, 6
+      t = t + bm(v,i)*sv(v)
+    end do
+    r(i) = r(i) + t*dv
   end do
   do b = 1, size(dndx, 2)
     ib = 3*(b - 1)
     ! (C B_b) dv, 108 multiply-adds, reused for every a <= b
     do kk = 1, 3
-      do v = 1, 6
-        cb(v,kk) = sum(cv(v,:)*bm(:,ib + kk))*dv
+      cb(:,kk) = 0
+      do z = 1, 6
+        cb(:,kk) = cb(:,kk) + cv(:,z)*bm(z, ib + kk)
       end do
+      cb(:,kk) = cb(:,kk)*dv
     end do
-    sd = matmul(sm, dndx(:,b))*dv
+    do i = 1, 3
+      sd(i) = (sm(i,1)*dndx(1,b) + sm(i,2)*dndx(2,b) + sm(i,3)*dndx(3,b))*dv
+    end do
     do a = 1, b
       ia = 3*(a - 1)
+      ! K_ab = B_a^T (C B_b), 54 multiply-adds, plus the geometric diagonal
+      t = dndx(1,a)*sd(1) + dndx(2,a)*sd(2) + dndx(3,a)*sd(3)
       do kk = 1, 3
         do i = 1, 3
-          k(ia + i, ib + kk) = k(ia + i, ib + kk) + sum(bm(:,ia + i)*cb(:,kk))
+          k(ia + i, ib + kk) = k(ia + i, ib + kk) &
+            & + bm(1, ia + i)*cb(1,kk) + bm(2, ia + i)*cb(2,kk) + bm(3, ia + i)*cb(3,kk) &
+            & + bm(4, ia + i)*cb(4,kk) + bm(5, ia + i)*cb(5,kk) + bm(6, ia + i)*cb(6,kk)
         end do
-        k(ia + kk, ib + kk) = k(ia + kk, ib + kk) + sum(dndx(:,a)*sd)
+        k(ia + kk, ib + kk) = k(ia + kk, ib + kk) + t
       end do
     end do
   end do
@@ -130,7 +145,7 @@ pure subroutine elem_ref(q, s, xref, u, mat, par, r, k)
   r = 0
   k = 0
   do g = 1, q%npoints
-    call ref_gradients(q, s, g, xref, dndx, dv)
+    call shape_gradients(q, s, g, xref, dndx, dv)
     f = grad_u(u, dndx)
     call mat(f, par, sv, cv)
     call bmatrix(f, dndx, bm)
@@ -146,26 +161,26 @@ pure subroutine elem_cur(q, s, xref, u, mat, par, r, k)
   real(dp), intent(in) :: xref(:,:), u(:,:), par(:)
   procedure(voigt_material) :: mat
   real(dp), intent(out) :: r(:), k(:,:)
-  real(dp) :: dndx(3, s%nnodes), dndxc(3, s%nnodes), bm(6, 3*s%nnodes), f(3,3), fi(3,3)
-  real(dp) :: sv(6), cv(6,6), dv
+  real(dp) :: x(3, s%nnodes), dndx(3, s%nnodes), bm(6, 3*s%nnodes), f(3,3), sv(6), cv(6,6), dv
   integer :: g, a, jj
   r = 0
   k = 0
+  x = xref + u
   do g = 1, q%npoints
-    call ref_gradients(q, s, g, xref, dndx, dv)
-    f = grad_u(u, dndx)
-    call mat(f, par, sv, cv)
-    ! dN/dx = F^(-T) dN/dX and dv = J dV
-    fi = inv3(f)
+    ! Discrete updated Lagrangian: dN/dx and dv from the current coordinates,
+    ! F from F^-1 = I - du/dx; nothing is pushed forward from the reference configuration
+    call shape_gradients(q, s, g, x, dndx, dv)
+    f = eye3
     do a = 1, s%nnodes
       do jj = 1, 3
-        dndxc(jj,a) = sum(fi(:,jj)*dndx(:,a))
+        f(:,jj) = f(:,jj) - u(:,a)*dndx(jj,a)
       end do
     end do
-    dv = det3(f)*dv
+    f = inv3(f)
+    call mat(f, par, sv, cv)
     ! ponytail: dense B with F = I spends half its work on zeros; a sparse spatial B if cur matters
-    call bmatrix(eye3, dndxc, bm)
-    call add_voigt(bm, dndxc, sv, cv, dv, r, k)
+    call bmatrix(eye3, dndx, bm)
+    call add_voigt(bm, dndx, sv, cv, dv, r, k)
   end do
   call mirror(k)
 end subroutine elem_cur
@@ -182,7 +197,7 @@ pure subroutine elem_mix(q, s, xref, u, mat, par, r, k)
   r = 0
   k = 0
   do g = 1, q%npoints
-    call ref_gradients(q, s, g, xref, dndx, dv)
+    call shape_gradients(q, s, g, xref, dndx, dv)
     f = grad_u(u, dndx)
     call mat(f, par, p, am)
     do a = 1, s%nnodes
