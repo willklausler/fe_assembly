@@ -1,0 +1,23 @@
+name = "fe_assembly_jax"
+version = "0.1.0"
+license = "MIT"
+author = "Will Klausler"
+maintainer = "226649647+willklausler@users.noreply.github.com"
+copyright = "Copyright 2026, Will Klausler"
+description = "JAX automatic-differentiation material paradigm for fe_assembly, through embedded Python"
+
+[dependencies]
+fe_assembly = { path = ".." }
+
+# Linux only (pybridge.c uses clock_gettime); build through run.sh, which adds
+# the Python headers and libpython of ../.venv.
+# No sanitizers in debug: the embedded interpreter's allocations would fail LeakSanitizer.
+[features]
+debug.gfortran.flags = "-g -Wall -fbacktrace -fcheck=all -Wextra -Wimplicit-interface -finit-real=snan"
+debug.ifx.linux.flags = "-g -check all -warn all -traceback -fpe0"
+release.gfortran.flags = "-O3 -fbacktrace -march=native -funroll-loops"
+release.ifx.linux.flags = "-O3 -xHost -unroll"
+
+[profiles]
+debug = ["debug"]
+release = ["release"]

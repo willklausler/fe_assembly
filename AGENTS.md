@@ -18,12 +18,17 @@ except where "Deviations from the package standard" below says otherwise.
 | `notes/notes.typ` | Typst notes: notation, general relations, element R and K; includes the models |
 | `notes/<model>.typ` | Stress and tangent of one material model in the three configurations |
 | `notes/defs.typ` | Shared math symbols, imported by every notes file |
+| `jax/` | Subpackage: JAX automatic-differentiation paradigm through embedded Python; Linux, `../.venv`, not in CI |
+| `jax/python/fe_jax.py` | Energies Psi(I1, I2, J) and AD stress and tangent per configuration |
+| `jax/src/pybridge.c` | Embedded interpreter; Fortran buffers cross as memoryviews |
+| `jax/src/jax_materials.f90` | `jax_material` extends `material`, overriding only the batched methods |
+| `jax/test/test_jax.f90`, `jax/app/main.f90` | AD against the closed forms; native-versus-JAX bench |
 | `ci.sh` | Local check with every installed compiler |
 | `.github/workflows/ci.yml` | GitHub CI: compiler × OS matrix |
 | `CLAUDE.local.md` | Maintainer's goal and specification; gitignored |
 
-Directories that come with later work, created when first needed: `python/`
-(JAX bridge and socket server), `example/`.
+Directories that come with later work, created when first needed: the socket
+server, `example/`.
 
 ## Commands
 
@@ -36,6 +41,8 @@ perf stat -e cycles,instructions $(fpm run --profile release --runner echo)   # 
 valgrind $(fpm run --profile release --runner echo) 100 1                     # heap allocations
 ./ci.sh                              # gfortran, ifx, nvfortran if installed
 typst compile notes/notes.typ build/notes/notes.pdf   # notes; output is not committed
+jax/run.sh test --profile release    # JAX paradigm: AD against closed forms (needs ../.venv with jax)
+jax/run.sh run --profile release     # native versus JAX: JIT, batch 1 / 8 / mesh, element
 ```
 
 Done means: the tests pass for every compiler you have in both profiles, and
