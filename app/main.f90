@@ -1,26 +1,30 @@
 ! SPDX-License-Identifier: MIT
 program bench
-  !! Times element R and K assembly for every material and configuration, and
-  !! the material call alone on the same deformation gradients.
-  !! Usage: fpm run --profile release [-- nelem [ntrial]]
+  !! Times element R and K assembly and the material call alone (same deformation
+  !! gradients), per model and configuration, for the hand-derived routines (native)
+  !! and the JAX-exported ones (export). Table on standard output, CSV with --csv.
+  !! Usage: fpm run --profile release -- --help
   use, intrinsic :: iso_fortran_env, only: dp => real64
   use cubatures, only: cubature, CUB_HEX
   use shapefuncs, only: shapefunc
   use materials, only: material, material_set, cfgname
   use materials_ad, only: material_set_ad
-  use harness, only: test_element, element_gradients, assemble, stopwatch, start_watch, cpu_seconds, int_arg
+  use harness, only: test_element, element_gradients, assemble, stopwatch, start_watch, cpu_seconds, &
+    & bench_options, parse_options, selected, csv_open, csv_row
   implicit none
-  integer :: nelem = 2000, ntrial = 7
+  character(*), parameter :: paradigm(2) = ['native', 'export']
+  type(bench_options) :: opts
   type(cubature) :: q
   type(shapefunc) :: s
   type(material), allocatable :: mats(:)
   real(dp), allocatable :: xref(:,:,:), u(:,:,:), fg(:,:,:,:)
   real(dp) :: telem, tmat, checksum = 0
   type(stopwatch) :: sw
-  integer :: e, m, c
+  integer :: e, m, c, csv, nelem
+  character(:), allocatable :: model
 
-  call int_arg(1, nelem)
-  call int_arg(2, ntrial)
+  call parse_options(opts, 'element R and K time per model and configuration, native and JAX-exported')
+  nelem = opts%nelem
   q = cubature(CUB_HEX, 2)
   s = shapefunc(q, 1)
   ! hand-derived models, then the same models exported from JAX; sections, not an
@@ -37,28 +41,37 @@ program bench
     call element_gradients(q, s, xref(:,:,e), u(:,:,e), fg(:,:,:,e))
   end do
 
+  call csv_open(opts, csv)
   write(*, '(a, i0, a, i0, a, i0, a)') 'element: ', s%nnodes, ' nodes, ', nelem, ' elements, best of ', &
-    & ntrial, ' trials, CPU time'
-  write(*, '(a8, a5, 3a12)') 'model', 'cfg', 'element ns', 'material ns', 'material %'
+    & opts%ntrial, ' trials, CPU time'
+  write(*, '(a8, a5, a8, 3a12)') 'model', 'cfg', 'impl', 'element us', 'material ns', 'material %'
   do m = 1, size(mats)
+    model = trim(mats(1 + mod(m - 1, 4))%name)
+    if (.not. (selected(model, opts%models) .and. selected(paradigm(1 + (m - 1)/4), opts%paradigms))) cycle
     do c = 1, 3
-      sw = start_watch(ntrial, cpu_seconds)
+      if (.not. selected(cfgname(c), opts%cfgs)) cycle
+      sw = start_watch(opts%ntrial, cpu_seconds)
       do while (sw%next())
         call element_sweep()
       end do
       telem = sw%best
-      sw = start_watch(ntrial, cpu_seconds)
+      sw = start_watch(opts%ntrial, cpu_seconds)
       do while (sw%next())
         call material_sweep()
       end do
       tmat = sw%best
-      write(*, '(a8, a5, 2f12.0, f12.1)') trim(mats(m)%name), cfgname(c), &
-        & 1e9_dp*telem/nelem, 1e9_dp*tmat/nelem, 100*tmat/telem
+      write(*, '(a8, a5, a8, f12.2, f12.0, f12.1)') model, cfgname(c), paradigm(1 + (m - 1)/4), &
+        & 1e6_dp*telem/nelem, 1e9_dp*tmat/(nelem*q%npoints), 100*tmat/telem
+      call csv_row(csv, opts, s, paradigm(1 + (m - 1)/4), model, cfgname(c), q%npoints, 'element_us', &
+        & 1e6_dp*telem/nelem)
+      call csv_row(csv, opts, s, paradigm(1 + (m - 1)/4), model, cfgname(c), q%npoints, 'material_ns_per_point', &
+        & 1e9_dp*tmat/(nelem*q%npoints))
     end do
   end do
   write(*, '(a, es12.4)') 'checksum ', checksum
+  if (csv /= -1) close(csv)
   ! gfortran does not free main-program allocatables at exit; LeakSanitizer would report them
-  deallocate(mats, xref, u, fg)
+  deallocate(mats, xref, u, fg, model)
 
 contains
 

@@ -38,8 +38,9 @@ Requires fpm 0.13 or later; the shape functions and cubatures are fetched as dep
 
 ```sh
 fpm test --profile release          # all checks
-fpm run --profile release           # benchmark: time per element, per model and configuration
+fpm run --profile release           # benchmark table; -- --help for options, -- --csv out.csv for data
 ./ci.sh                             # every installed compiler, both profiles, and the paradigms below
+.venv/bin/python tools/sweep.py     # the whole sweep into results/<timestamp>/ (CSV, env.json, summary.md, plots)
 ```
 
 The Python paradigms need a virtual environment `.venv` with `jax` (Linux):

@@ -11,6 +11,8 @@ keywords = ["finite-element", "hyperelasticity", "assembly", "benchmark", "profi
 
 [dependencies]
 fortran_shapefuncs = { git = "https://github.com/willklausler/fortran_shapefuncs", tag = "v0.2.0" }
+# command-line parsing for the benches; FLAP pins neither FACE nor PENF, so fpm takes their default branches
+FLAP = { git = "https://github.com/szaghi/FLAP", tag = "v2.5.3" }
 
 [features]
 debug.gfortran.flags = "-g -Wall -fbacktrace -fcheck=all -Wextra -Wpedantic -Wuninitialized -Wmaybe-uninitialized -Wimplicit-interface -Wimplicit-procedure -Warray-temporaries -Wrealloc-lhs -finit-real=snan -finit-integer=-2147483648 -finit-logical=true -fstack-protector-all"
@@ -18,15 +20,17 @@ debug.gfortran.linux.flags = "-fsanitize=address,undefined"
 debug.ifx.linux.flags = "-g -check all -warn all -traceback -fpe0 -init=snan,arrays -ftrapuv -fp-stack-check -diag-error-limit 10 -fsanitize=address,undefined"
 debug.ifx.windows.flags = "/Zi /check:all /warn:all /traceback /fpe:0 /Qinit:snan,arrays /Qtrapuv"
 # -Mchkptr is omitted: it reports a null pointer inside list-directed derived-type I/O
-debug.nvfortran.flags = "-g -Minform=inform -Mbounds -Mchkstk -Mstandard -Ktrap=fp -traceback"
+# -Mstandard is omitted: with it nvfortran 26.3 emits FLAP's type descriptors twice (duplicate
+# symbols at link time); gfortran -Wpedantic still checks conformance
+debug.nvfortran.flags = "-g -Minform=inform -Mbounds -Mchkstk -Ktrap=fp -traceback"
 debug.flang.flags = "-g"
 
-# -fstack-arrays added: gfortran otherwise mallocs every automatic array (the element kernels'
-# s%nnodes-sized scratch) on each call; ifx and nvfortran use the stack by default
+# -fstack-arrays and -Mstack_arrays added: gfortran and nvfortran otherwise malloc every automatic
+# array (the element kernels' s%nnodes-sized scratch) on each call; ifx uses the stack by default
 release.gfortran.flags = "-O3 -fbacktrace -march=native -funroll-loops -fstack-arrays"
 release.ifx.linux.flags = "-O3 -xHost -unroll"
 release.ifx.windows.flags = "/O3 /QxHost /Qunroll"
-release.nvfortran.flags = "-Mrecursive -fast"
+release.nvfortran.flags = "-Mrecursive -fast -Mstack_arrays"
 release.flang.flags = "-O3"
 
 [profiles]

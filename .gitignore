@@ -5,3 +5,4 @@ CLAUDE.local.md
 reference.zip
 notes/*.pdf
 __pycache__/
+results/

@@ -344,9 +344,10 @@ pure subroutine svk_ref(f, par, s, c)
   !! S and CC
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
-  real(dp) :: e(3,3)
+  real(dp) :: t3(3,3), e(3,3)
   e = (matmul(transpose(f), f) - eye3)/2
-  s = voigt(par(1)*(e(1,1) + e(2,2) + e(3,3))*eye3 + 2*par(2)*e)
+  t3 = par(1)*(e(1,1) + e(2,2) + e(3,3))*eye3 + 2*par(2)*e
+  call voigt(t3, s)
   c = iso4(eye3, par(1), par(2))
 end subroutine svk_ref
 
@@ -354,10 +355,12 @@ pure subroutine svk_cur(f, par, s, c)
   !! sigma and cc
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
-  real(dp) :: b(3,3), j
+  real(dp) :: t3(3,3), b(3,3), j
   b = matmul(f, transpose(f))
   j = det3(f)
-  s = voigt(par(1)*(b(1,1) + b(2,2) + b(3,3) - 3)/2*b + par(2)*(matmul(b, b) - b))/j
+  t3 = par(1)*(b(1,1) + b(2,2) + b(3,3) - 3)/2*b + par(2)*(matmul(b, b) - b)
+  call voigt(t3, s)
+  s = s/j
   c = iso4(b, par(1), par(2))/j
 end subroutine svk_cur
 
@@ -399,10 +402,11 @@ pure subroutine nh_ref(f, par, s, c)
   !! S and CC
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
-  real(dp) :: ci(3,3), lnj
+  real(dp) :: t3(3,3), ci(3,3), lnj
   lnj = log(detf(f, 'nh_ref'))
-  ci = inv3(matmul(transpose(f), f))
-  s = voigt(par(2)*(eye3 - ci) + par(1)*lnj*ci)
+  call inv3(matmul(transpose(f), f), ci)
+  t3 = par(2)*(eye3 - ci) + par(1)*lnj*ci
+  call voigt(t3, s)
   c = 0
   call add_outer6(c, par(1), ci, ci)
   call add_isym6(c, 2*(par(2) - par(1)*lnj), ci)
@@ -412,10 +416,12 @@ pure subroutine nh_cur(f, par, s, c)
   !! sigma and cc
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
-  real(dp) :: j, lnj
+  real(dp) :: t3(3,3), j, lnj
   j = detf(f, 'nh_cur')
   lnj = log(j)
-  s = voigt(par(2)*(matmul(f, transpose(f)) - eye3) + par(1)*lnj*eye3)/j
+  t3 = par(2)*(matmul(f, transpose(f)) - eye3) + par(1)*lnj*eye3
+  call voigt(t3, s)
+  s = s/j
   c = iso4(eye3, par(1), par(2) - par(1)*lnj)/j
 end subroutine nh_cur
 
@@ -425,7 +431,7 @@ pure subroutine nh_mix(f, par, p, a)
   real(dp), intent(out) :: p(3,3), a(9,9)
   real(dp) :: fi(3,3), fit(3,3), lnj
   lnj = log(detf(f, 'nh_mix'))
-  fi = inv3(f)
+  call inv3(f, fi)
   fit = transpose(fi)
   p = par(2)*(f - fit) + par(1)*lnj*fit
   a = 0
@@ -450,15 +456,16 @@ pure subroutine mnh_ref(f, par, s, c)
   !! S and CC
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
-  real(dp) :: ci(3,3), siso(3,3), j, i1, p, pt, g
+  real(dp) :: t3(3,3), ci(3,3), siso(3,3), j, i1, p, pt, g
   j = detf(f, 'mnh_ref')
-  ci = inv3(matmul(transpose(f), f))
+  call inv3(matmul(transpose(f), f), ci)
   i1 = sum(f*f)
   p = par(1)/2*(j - 1/j)
   pt = par(1)*j
   g = par(2)*j**(-2._dp/3)
   siso = g*(eye3 - i1/3*ci)
-  s = voigt(j*p*ci + siso)
+  t3 = j*p*ci + siso
+  call voigt(t3, s)
   c = 0
   call add_outer6(c, j*pt - 2*g*i1/9, ci, ci)
   call add_isym6(c, -2*j*p + 2*g*i1/3, ci)
@@ -470,14 +477,15 @@ pure subroutine mnh_cur(f, par, s, c)
   !! sigma and cc
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
-  real(dp) :: bb(3,3), tiso(3,3), j, p, pt, trbb
+  real(dp) :: t3(3,3), bb(3,3), tiso(3,3), j, p, pt, trbb
   j = detf(f, 'mnh_cur')
   p = par(1)/2*(j - 1/j)
   pt = par(1)*j
   bb = j**(-2._dp/3)*matmul(f, transpose(f))
   trbb = bb(1,1) + bb(2,2) + bb(3,3)
   tiso = par(2)*(bb - trbb/3*eye3)
-  s = voigt(p*eye3 + tiso/j)
+  t3 = p*eye3 + tiso/j
+  call voigt(t3, s)
   c = 0
   call add_outer6(c, pt - 2*par(2)*trbb/(9*j), eye3, eye3)
   call add_isym6(c, -2*p + 2*par(2)*trbb/(3*j), eye3)
@@ -491,7 +499,7 @@ pure subroutine mnh_mix(f, par, p, a)
   real(dp), intent(out) :: p(3,3), a(9,9)
   real(dp) :: fi(3,3), fit(3,3), j, i1, pr, pt, g
   j = detf(f, 'mnh_mix')
-  fi = inv3(f)
+  call inv3(f, fi)
   fit = transpose(fi)
   i1 = sum(f*f)
   pr = par(1)/2*(j - 1/j)
@@ -525,12 +533,12 @@ pure subroutine mr_ref(f, par, s, c)
   !! S and CC; the projection P : CCbar : P^T is expanded in closed form
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
-  real(dp) :: cg(3,3), ci(3,3), cb(3,3), sbar(3,3), siso(3,3), d1(3,3)
+  real(dp) :: t3(3,3), cg(3,3), ci(3,3), cb(3,3), sbar(3,3), siso(3,3), d1(3,3)
   real(dp) :: j, j23, i1, p, pt, scc, k4, k2
   j = detf(f, 'mr_ref')
   j23 = j**(-2._dp/3)
   cg = matmul(transpose(f), f)
-  ci = inv3(cg)
+  call inv3(cg, ci)
   i1 = cg(1,1) + cg(2,2) + cg(3,3)
   p = par(3)/2*(j - 1/j)
   pt = par(3)*j
@@ -538,7 +546,8 @@ pure subroutine mr_ref(f, par, s, c)
   sbar = 2*par(1)*eye3 + 2*par(2)*(j23*i1*eye3 - cb)
   scc = sum(sbar*cg)
   siso = j23*(sbar - scc/3*ci)
-  s = voigt(j*p*ci + siso)
+  t3 = j*p*ci + siso
+  call voigt(t3, s)
   d1 = eye3 - i1/3*ci
   ! k4 multiplies P : CCbar : P^T, k2 the trace term
   k4 = 4*par(2)*j23**2
@@ -558,7 +567,7 @@ pure subroutine mr_cur(f, par, s, c)
   !! sigma and cc; the projection P : ccbar : P is expanded in closed form
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
-  real(dp) :: bb(3,3), bb2(3,3), tbar(3,3), tiso(3,3), dbb(3,3), j, p, pt, i1b, trt, k4, k2
+  real(dp) :: t3(3,3), bb(3,3), bb2(3,3), tbar(3,3), tiso(3,3), dbb(3,3), j, p, pt, i1b, trt, k4, k2
   j = detf(f, 'mr_cur')
   p = par(3)/2*(j - 1/j)
   pt = par(3)*j
@@ -569,7 +578,8 @@ pure subroutine mr_cur(f, par, s, c)
   trt = tbar(1,1) + tbar(2,2) + tbar(3,3)
   tiso = tbar - trt/3*eye3
   dbb = bb - i1b/3*eye3
-  s = voigt(p*eye3 + tiso/j)
+  t3 = p*eye3 + tiso/j
+  call voigt(t3, s)
   ! k4 multiplies P : ccbar : P, k2 the trace term
   k4 = 4*par(2)/j
   k2 = 2*trt/(3*j)
@@ -592,7 +602,7 @@ pure subroutine mr_mix(f, par, p, a)
   j = detf(f, 'mr_mix')
   j23 = j**(-2._dp/3)
   j43 = j23**2
-  fi = inv3(f)
+  call inv3(f, fi)
   fit = transpose(fi)
   ft = transpose(f)
   b = matmul(f, ft)

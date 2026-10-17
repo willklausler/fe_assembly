@@ -16,7 +16,8 @@ except where "Deviations from the package standard" below says otherwise.
 | `src/elements.f90` | Element R and K per configuration (`elem_ref/_cur/_mix`) |
 | `src/harness.f90` | Test and bench support (test elements, checks, stopwatch, paradigm checks and table); never used by the kernels |
 | `test/test_fe_assembly.f90` | The test program |
-| `app/main.f90` | `bench`, the fpm app: times element R and K and the material call alone |
+| `app/main.f90` | `bench`, the fpm app: element R and K and the material call alone, native and JAX-exported; table and CSV |
+| `tools/sweep.py` | Runs every bench for every compiler and paradigm into `results/<timestamp>/`: CSV, `env.json`, `summary.md`, plots |
 | `notes/notes.typ` | Typst notes: notation, general relations, element R and K; includes the models |
 | `notes/<model>.typ` | Stress and tangent of one material model in the three configurations |
 | `notes/defs.typ` | Shared math symbols, imported by every notes file |
@@ -39,9 +40,10 @@ Directories that come with later work, created when first needed: `example/`.
 fpm test --profile debug             # fast check, gfortran
 fpm test --profile release
 fpm run --profile release            # benchmark: 2000 elements, best of 7 trials
-fpm run --profile release -- 500 3   # nelem, ntrial
+fpm run --profile release -- --help  # options: --nelem --ntrial --csv --tag --models --cfgs --paradigms
+.venv/bin/python tools/sweep.py      # whole sweep: all compilers and paradigms, CSV, summary.md, plots
+.venv/bin/python tools/sweep.py --allocations   # also heap allocations per element (valgrind)
 perf stat -e cycles,instructions $(fpm run --profile release --runner echo)   # IPC
-valgrind $(fpm run --profile release --runner echo) 100 1                     # heap allocations
 ./ci.sh                              # every installed compiler, both profiles; jax/ and socket/ if .venv exists
 python3 jax/python/export_fortran.py --check   # generated file is current (no JAX needed)
 typst compile notes/notes.typ build/notes/notes.pdf   # notes; output is not committed
@@ -111,6 +113,12 @@ the app runs.
 - gfortran 13 enforces the 132-character free-form line limit; gfortran 14 accepted longer lines.
 - nvfortran 26.3 loses the procedure pointers of an array section passed to a `class(material)`
   dummy: pass whole arrays.
+- nvfortran 26.3 returns array function results through the heap, and copies an array to a heap
+  temporary when its own elements appear on the right of an assignment to it: `inv3` and `voigt` are
+  subroutines. `-Mstack_arrays` is set but did not remove its remaining 2 allocations per point in
+  svk cur/mix and mr ref (measured with `tools/sweep.py --allocations`).
+- nvfortran 26.3 with `-Mstandard` emits FLAP's type descriptors twice (link failure): dropped from
+  the nvfortran debug flags.
 - ifx's `system_clock` follows the wall clock, which WSL2 re-syncs with jumps: the native bench uses
   `cpu_time`, the paradigm benches `clock_gettime(CLOCK_MONOTONIC)`.
 - oneAPI `setvars.sh` silently does nothing when run twice in one environment: `ci.sh` uses `--force`
@@ -121,12 +129,18 @@ the app runs.
 - Several modules in `src/`, one per concern (tensors, materials, generated materials, elements, harness), instead of one module per package: the sweep is 4 materials × 3 configurations × several evaluation paradigms.
 - Two subpackages, `jax/` and `socket/`, keep Python out of the main package and its CI.
 - Not yet published (no release, Zenodo, Pages): no `llms.txt`, `tools/check_docs.py`, man page, `CITATION.cff`, `CONTRIBUTING.md`, `ford.md`, `docs.yml` or `Makefile`. Add them when the maintainer decides to publish.
-- stdlib, FLAP and fplotlib are planned dependencies; add each when code first uses it.
+- FLAP (pinned v2.5.3; it pins neither FACE nor PENF) parses the bench command lines. stdlib and
+  fplotlib remain planned; plots come from matplotlib in `tools/sweep.py`.
 
 ## Benchmark rules
 
-- Report the best of several trials (OS noise only adds time) with `harness%stopwatch`; every
-  result feeds a checksum so no call is optimized away.
+- Report the best of several trials (OS noise only adds time) with `harness%stopwatch`, which
+  ignores non-positive intervals; every result feeds a checksum so no call is optimized away.
+- Benches share one command line (`harness%parse_options`, FLAP) and write CSV in long format:
+  `paradigm,compiler,model,cfg,element,order,nnodes,npoints,batch,quantity,value`, with the compiler
+  version and options as `#` comments. Quantities: `element_us`, `material_ns_per_point`,
+  `first_call_s`, `transport_us_per_call`, and from `tools/sweep.py --allocations`
+  `heap_allocs_per_element`. `tools/sweep.py` records the machine and versions in `env.json`.
 - The native bench times with `cpu_time`: ifx's `system_clock` follows the wall clock, which WSL2
   re-syncs with jumps (a sweep once measured -1 s).
 - The material-only timing calls the same procedure pointer on the same deformation gradients as

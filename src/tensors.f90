@@ -10,7 +10,7 @@ module tensors
   private
 
   public :: eye3, vi, vj
-  public :: det3, inv3, voigt, unvoigt
+  public :: det3, inv3, voigt
 
   real(dp), parameter :: eye3(3,3) = reshape([1._dp, 0._dp, 0._dp, 0._dp, 1._dp, 0._dp, &
                                             & 0._dp, 0._dp, 1._dp], [3, 3])
@@ -28,10 +28,12 @@ pure function det3(a) result(d)
     & + a(1,3)*(a(2,1)*a(3,2) - a(2,2)*a(3,1))
 end function det3
 
-pure function inv3(a) result(b)
-  !! inverse by the adjugate; the caller ensures det3(a) /= 0
+pure subroutine inv3(a, b)
+  !! b = a^-1 by the adjugate; the caller ensures det3(a) /= 0
+  !! (a subroutine: nvfortran 26.3 returns even a 3x3 function result through the heap)
   real(dp), intent(in) :: a(3,3)
-  real(dp) :: b(3,3)
+  real(dp), intent(out) :: b(3,3)
+  real(dp) :: d
   b(1,1) = a(2,2)*a(3,3) - a(2,3)*a(3,2)
   b(1,2) = a(1,3)*a(3,2) - a(1,2)*a(3,3)
   b(1,3) = a(1,2)*a(2,3) - a(1,3)*a(2,2)
@@ -41,26 +43,20 @@ pure function inv3(a) result(b)
   b(3,1) = a(2,1)*a(3,2) - a(2,2)*a(3,1)
   b(3,2) = a(1,2)*a(3,1) - a(1,1)*a(3,2)
   b(3,3) = a(1,1)*a(2,2) - a(1,2)*a(2,1)
-  b = b/(a(1,1)*b(1,1) + a(1,2)*b(2,1) + a(1,3)*b(3,1))
-end function inv3
+  ! the determinant first: b = b/(... b(1,1) ...) made nvfortran copy b to a heap temporary
+  d = a(1,1)*b(1,1) + a(1,2)*b(2,1) + a(1,3)*b(3,1)
+  b = b/d
+end subroutine inv3
 
-pure function voigt(t) result(v)
-  !! stress-like Voigt vector of a symmetric tensor
+pure subroutine voigt(t, v)
+  !! stress-like Voigt vector v of a symmetric tensor t
+  !! (a subroutine: nvfortran 26.3 returns array function results through the heap)
   real(dp), intent(in) :: t(3,3)
-  real(dp) :: v(6)
-  integer :: a
-  v = [(t(vi(a), vj(a)), a = 1, 6)]
-end function voigt
-
-pure function unvoigt(v) result(t)
-  !! symmetric tensor of a stress-like Voigt vector
-  real(dp), intent(in) :: v(6)
-  real(dp) :: t(3,3)
+  real(dp), intent(out) :: v(6)
   integer :: a
   do a = 1, 6
-    t(vi(a), vj(a)) = v(a)
-    t(vj(a), vi(a)) = v(a)
+    v(a) = t(vi(a), vj(a))
   end do
-end function unvoigt
+end subroutine voigt
 
 end module tensors

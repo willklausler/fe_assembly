@@ -15,7 +15,7 @@ for FC in gfortran ifx nvfortran flang; do
     for PROFILE in debug release; do
         echo "--- $FC $PROFILE"
         if fpm test --compiler "$FC" --profile "$PROFILE" \
-            && fpm run --compiler "$FC" --profile "$PROFILE" -- 50 1 > /dev/null; then
+            && fpm run --compiler "$FC" --profile "$PROFILE" -- --nelem 50 --ntrial 1 > /dev/null; then
             echo "✅ $FC $PROFILE"
         else
             FAILED+=("$FC $PROFILE")

@@ -38,7 +38,7 @@ pure subroutine shape_gradients(q, s, g, x, dndx, dv)
       jac(:,jj) = jac(:,jj) + x(:,a)*s%derv(jj,a,g)
     end do
   end do
-  ji = inv3(jac)
+  call inv3(jac, ji)
   dv = det3(jac)*q%weights(g)
   ! dN/dx_j = sum_k (J^-1)_kj dN/dxi_k
   do a = 1, s%nnodes
@@ -125,12 +125,17 @@ end subroutine add_voigt
 pure subroutine mirror(k)
   ! copy the upper node blocks into the lower ones
   real(dp), intent(inout) :: k(:,:)
-  integer :: a, b, ia, ib
+  integer :: a, b, ia, ib, i, j
   do b = 1, size(k, 2)/3
     ib = 3*(b - 1)
     do a = 1, b - 1
       ia = 3*(a - 1)
-      k(ib+1:ib+3, ia+1:ia+3) = transpose(k(ia+1:ia+3, ib+1:ib+3))
+      ! explicit loop: nvfortran 26.3 makes a heap temporary for transpose of a section
+      do i = 1, 3
+        do j = 1, 3
+          k(ib + i, ia + j) = k(ia + j, ib + i)
+        end do
+      end do
     end do
   end do
 end subroutine mirror
@@ -182,7 +187,7 @@ subroutine elem_cur(q, s, xref, u, mat, r, k)
         fi(:,jj) = fi(:,jj) - u(:,a)*dndx(jj,a,g)
       end do
     end do
-    f(:,:,g) = inv3(fi)
+    call inv3(fi, f(:,:,g))
   end do
   call mat%cur(q%npoints, f, sv, cv)
   do g = 1, q%npoints

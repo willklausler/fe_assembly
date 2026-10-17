@@ -36,7 +36,8 @@ program test_fe_assembly
 
   ! Tensors ---------------------------------------------------------------
   w = reshape([2._dp, 1._dp, 0._dp, 0.5_dp, 3._dp, 1._dp, 0._dp, 0.25_dp, 1.5_dp], [3, 3])
-  call check(maxval(abs(matmul(w, inv3(w)) - eye3)) < tol, 'inv3: A A^-1 = I')
+  call inv3(w, jac)
+  call check(maxval(abs(matmul(w, jac) - eye3)) < tol, 'inv3: A A^-1 = I')
   call check(abs(det3(w) - 7.75_dp) < tol*8, 'det3 of a fixed matrix')
 
   ! Distorted unit cube and a finite displacement
