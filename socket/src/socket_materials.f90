@@ -2,25 +2,21 @@
 module socket_materials
   !! Materials evaluated by a separate Python server over a TCP socket (FEAP style).
   !!
-  !! Type socket_material extends materials%material and overrides only the batched
-  !! methods ref, cur, mix: each is one synchronous request/response for n points.
+  !! Type socket_material extends materials%remote_material: make creates a
+  !! server-side handle, evaluate is one synchronous request/response for n points.
   !! The client is plain Fortran bound to the POSIX socket API (Linux: MSG_MORE,
   !! MSG_NOSIGNAL). socket_start launches python/server.py and connects;
-  !! socket_set creates the server-side handles, compiling and verifying each once
-  !! at F = I; socket_stop shuts the server down. The connection is module state:
-  !! one server per program.
+  !! socket_set creates and verifies the handles once (remote_setup); socket_stop
+  !! shuts the server down. The connection is module state: one server per program.
   use, intrinsic :: iso_c_binding, only: c_int, c_int16_t, c_int32_t, c_int64_t, c_long, &
     & c_size_t, c_intptr_t, c_char, c_ptr, c_loc, c_null_char, c_double
   use, intrinsic :: iso_fortran_env, only: dp => real64
-  use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-  use tensors, only: eye3
-  use materials, only: material, material_set
+  use materials, only: remote_material, remote_setup
   implicit none
   private
 
   public :: socket_material, socket_start, socket_set, socket_stop, socket_ping, wtime
 
-  character(*), parameter :: cfgname(3) = ['ref', 'cur', 'mix']
   integer(c_int), parameter :: AF_INET = 2, SOCK_STREAM = 1, IPPROTO_TCP = 6, TCP_NODELAY = 1
   integer(c_int), parameter :: MSG_NOSIGNAL = int(z'4000'), MSG_MORE = int(z'8000')
   integer(c_int), parameter :: CLOCK_MONOTONIC = 1
@@ -28,14 +24,11 @@ module socket_materials
   integer(c_int) :: fd = -1
     ! the connected socket
 
-  type, extends(material) :: socket_material
+  type, extends(remote_material) :: socket_material
     !! a material whose batched methods call the server
-    integer :: h(3) = -1
-      !! server handles for ref, cur, mix; -1 if not available
   contains
-    procedure :: ref => socket_ref
-    procedure :: cur => socket_cur
-    procedure :: mix => socket_mix
+    procedure :: make => socket_make
+    procedure :: evaluate => socket_evaluate
   end type socket_material
 
   type, bind(C) :: sockaddr_in
@@ -144,35 +137,12 @@ subroutine socket_start(python, port)
 end subroutine socket_start
 
 function socket_set(lam, mu, cfgs, nwarm) result(m)
-  !! the native material_set models with server methods for the configurations in cfgs,
-  !! compiled and verified for batches of nwarm points
+  !! the material_set models with server methods for cfgs, compiled for batches of nwarm
   real(dp), intent(in) :: lam, mu
   character(*), intent(in) :: cfgs(:)
-    !! subset of 'ref', 'cur', 'mix'
   integer, intent(in) :: nwarm
-    !! batch size of the first call (8 for one hex8 element)
-  type(socket_material), allocatable :: m(:)
-  type(material), allocatable :: native(:)
-  real(dp) :: f(3,3,nwarm), stress(9*nwarm), tangent(81*nwarm)
-  integer :: i, c, g, ns
-  native = material_set(lam, mu)
-  allocate(m(size(native)))
-  do g = 1, nwarm
-    f(:,:,g) = eye3
-  end do
-  do i = 1, size(native)
-    m(i)%material = native(i)
-    do c = 1, 3
-      if (.not. any(cfgs == cfgname(c))) cycle
-      m(i)%h(c) = make_handle(m(i)%name, cfgname(c), m(i)%par)
-      if (m(i)%h(c) < 0) error stop 'socket_set: server make failed for ' // trim(m(i)%name)
-      ! compile, then verify: every model is stress-free at F = I with a finite tangent
-      ns = merge(9, 6, c == 3)
-      call evaluate(OP_EVAL, m(i)%h(c), nwarm, f, stress, ns, tangent, ns*ns)
-      if (any(.not. ieee_is_finite(tangent(:ns*ns*nwarm))) .or. maxval(abs(stress(:ns*nwarm))) > 1e-12_dp) &
-        & error stop 'socket_set: ' // trim(m(i)%name) // ' ' // cfgname(c) // ' fails at F = I'
-    end do
-  end do
+  type(socket_material) :: m(4)
+  call remote_setup(m, lam, mu, cfgs, nwarm)
 end function socket_set
 
 subroutine socket_stop()
@@ -212,7 +182,7 @@ subroutine send_all(p, nbytes, flags)
   done = 0
   do while (done < nbytes)
     rc = c_send(fd, offset(p, done), nbytes - done, ior(flags, MSG_NOSIGNAL))
-    if (rc <= 0) error stop 'socket_materials: send failed (server gone?)'
+    if (rc <= 0) error stop 'send_all: send failed (server gone?)'
     done = done + int(rc, c_size_t)
   end do
 end subroutine send_all
@@ -226,7 +196,7 @@ subroutine recv_all(p, nbytes)
   done = 0
   do while (done < nbytes)
     rc = c_recv(fd, offset(p, done), nbytes - done, 0_c_int)
-    if (rc <= 0) error stop 'socket_materials: recv failed (server gone?)'
+    if (rc <= 0) error stop 'recv_all: recv failed (server gone?)'
     done = done + int(rc, c_size_t)
   end do
 end subroutine recv_all
@@ -241,23 +211,23 @@ subroutine send_header(op, h, n, nbytes, flags)
   call send_all(c_loc(header), 16_c_size_t, flags)
 end subroutine send_header
 
-function make_handle(model, cfg, par) result(h)
-  ! server handle of fe_jax.make(model, cfg) holding par, or -1
-  character(*), intent(in) :: model, cfg
-  real(dp), intent(in) :: par(:)
+function socket_make(self, cfg) result(h)
+  ! server handle of fe_jax.make(name, cfg) holding the parameters, or -1
+  class(socket_material), intent(in) :: self
+  character(*), intent(in) :: cfg
   integer :: h
-  character(kind=c_char, len=20 + 8*size(par)), target :: payload
+  character(kind=c_char, len=20 + 8*size(self%par)), target :: payload
   integer(c_int64_t), target :: reply
   character(16) :: name16
   character(4) :: cfg4
-  name16 = model
+  name16 = self%name
   cfg4 = cfg
-  payload = name16 // cfg4 // transfer(par, repeat(' ', 8*size(par)))
+  payload = name16 // cfg4 // transfer(self%par, repeat(' ', 8*size(self%par)))
   call send_header(OP_MAKE, 0, 0, len(payload), MSG_MORE)
   call send_all(c_loc(payload), int(len(payload), c_size_t), 0_c_int)
   call recv_all(c_loc(reply), 8_c_size_t)
   h = int(reply)
-end function make_handle
+end function socket_make
 
 subroutine evaluate(op, h, n, f, stress, ns, tangent, nt)
   ! one request/response: F(3,3,n) out, status, stress(ns,n), tangent(nt,n) back
@@ -272,41 +242,15 @@ subroutine evaluate(op, h, n, f, stress, ns, tangent, nt)
   call recv_all(c_loc(status), 8_c_size_t)
   call recv_all(c_loc(stress), int(8*ns*n, c_size_t))
   call recv_all(c_loc(tangent), int(8*nt*n, c_size_t))
-  if (status /= 0) error stop 'socket_materials: server failed to evaluate'
+  if (status /= 0) error stop 'evaluate: the server failed to evaluate'
 end subroutine evaluate
 
-subroutine call_server(self, c, n, f, stress, ns, tangent, nt)
-  ! one evaluation; stops if the configuration has no handle
+subroutine socket_evaluate(self, h, n, f, stress, ns, tangent, nt)
   class(socket_material), intent(in) :: self
-  integer, intent(in) :: c, n, ns, nt
+  integer, intent(in) :: h, n, ns, nt
   real(dp), intent(in) :: f(3,3,n)
   real(dp), intent(out) :: stress(ns,n), tangent(nt,n)
-  if (self%h(c) < 0) error stop 'socket_material: no server handle for ' // cfgname(c)
-  call evaluate(OP_EVAL, self%h(c), n, f, stress, ns, tangent, nt)
-end subroutine call_server
-
-subroutine socket_ref(self, n, f, s, c)
-  class(socket_material), intent(in) :: self
-  integer, intent(in) :: n
-  real(dp), intent(in) :: f(3,3,n)
-  real(dp), intent(out) :: s(6,n), c(6,6,n)
-  call call_server(self, 1, n, f, s, 6, c, 36)
-end subroutine socket_ref
-
-subroutine socket_cur(self, n, f, s, c)
-  class(socket_material), intent(in) :: self
-  integer, intent(in) :: n
-  real(dp), intent(in) :: f(3,3,n)
-  real(dp), intent(out) :: s(6,n), c(6,6,n)
-  call call_server(self, 2, n, f, s, 6, c, 36)
-end subroutine socket_cur
-
-subroutine socket_mix(self, n, f, p, a)
-  class(socket_material), intent(in) :: self
-  integer, intent(in) :: n
-  real(dp), intent(in) :: f(3,3,n)
-  real(dp), intent(out) :: p(3,3,n), a(9,9,n)
-  call call_server(self, 3, n, f, p, 9, a, 81)
-end subroutine socket_mix
+  call evaluate(OP_EVAL, h, n, f, stress, ns, tangent, nt)
+end subroutine socket_evaluate
 
 end module socket_materials

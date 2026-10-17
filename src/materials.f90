@@ -7,16 +7,19 @@ module materials
   !! *_ref: S and CC in Voigt form (6, 6x6); *_cur: sigma and cc in Voigt form;
   !! *_mix: P (3x3) and AA (9x9, two-point index i + 3 (J - 1)).
   !! Elements call the batched methods mat%ref, mat%cur, mat%mix on all points of
-  !! an element at once; other evaluation paradigms (jax/) extend type material
-  !! and override only these three methods.
+  !! an element at once. Paradigms that evaluate elsewhere (jax/, socket/) extend
+  !! remote_material and supply only make (a handle per configuration) and evaluate;
+  !! remote_setup compiles and verifies every handle once, so calls carry no checks.
   !! Formulas and notation: notes/notes.typ.
   !! Models with ln J stop with error stop when det F <= 0 (an inverted element).
   use, intrinsic :: iso_fortran_env, only: dp => real64
+  use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
   use tensors, only: eye3, vi, vj, det3, inv3, voigt
   implicit none
   private
 
-  public :: material, material_set
+  public :: material, material_set, cfgname
+  public :: remote_material, remote_setup
   public :: energy_function, voigt_material, twopoint_material
   public :: svk_energy, svk_ref, svk_cur, svk_mix
   public :: nh_energy, nh_ref, nh_cur, nh_mix
@@ -38,6 +41,39 @@ module materials
     procedure :: mix => material_mix
       !! P and AA at n points: f(3,3,n) -> p(3,3,n), a(9,9,n)
   end type material
+
+  character(*), parameter :: cfgname(3) = ['ref', 'cur', 'mix']
+    !! configuration names, in the order of remote_material%h
+
+  type, abstract, extends(material) :: remote_material
+    !! a material evaluated outside this process: handles per configuration
+    integer :: h(3) = -1
+      !! handles for ref, cur, mix; -1 if not set up
+  contains
+    procedure :: ref => remote_ref
+    procedure :: cur => remote_cur
+    procedure :: mix => remote_mix
+    procedure(remote_make), deferred :: make
+      !! handle for configuration cfg (with self%name, self%par), or -1
+    procedure(remote_evaluate), deferred :: evaluate
+      !! stress(ns,n), tangent(nt,n) at f(3,3,n) with handle h
+  end type remote_material
+
+  abstract interface
+    function remote_make(self, cfg) result(h)
+      import :: remote_material
+      class(remote_material), intent(in) :: self
+      character(*), intent(in) :: cfg
+      integer :: h
+    end function remote_make
+    subroutine remote_evaluate(self, h, n, f, stress, ns, tangent, nt)
+      import :: remote_material, dp
+      class(remote_material), intent(in) :: self
+      integer, intent(in) :: h, n, ns, nt
+      real(dp), intent(in) :: f(3,3,n)
+      real(dp), intent(out) :: stress(ns,n), tangent(nt,n)
+    end subroutine remote_evaluate
+  end interface
 
   abstract interface
     pure function energy_function(f, par) result(w)
@@ -98,6 +134,66 @@ subroutine material_mix(self, n, f, p, a)
     call self%mix_pt(f(:,:,g), self%par, p(:,:,g), a(:,:,g))
   end do
 end subroutine material_mix
+
+!-----------------------------------------------------------------------
+! Remote evaluation: set up and verified once, then no per-call checks
+!-----------------------------------------------------------------------
+
+subroutine remote_setup(m, lam, mu, cfgs, nwarm)
+  !! the material_set models with remote handles for the configurations in cfgs,
+  !! each compiled and verified (stress-free, finite tangent at F = I) for batches of nwarm
+  class(remote_material), intent(inout) :: m(:)
+  real(dp), intent(in) :: lam, mu
+  character(*), intent(in) :: cfgs(:)
+    !! subset of 'ref', 'cur', 'mix'
+  integer, intent(in) :: nwarm
+    !! batch size of the first call (the cubature points of one element)
+  type(material) :: native(4)
+  ! flat buffers: evaluate sees them as (ns, n), so only the first ns*n entries are written
+  real(dp) :: f(3,3,nwarm), stress(9*nwarm), tangent(81*nwarm)
+  integer :: i, c, g, ns
+  if (size(m) /= size(native)) error stop 'remote_setup: m must have one entry per model'
+  native = material_set(lam, mu)
+  do g = 1, nwarm
+    f(:,:,g) = eye3
+  end do
+  do i = 1, size(m)
+    m(i)%material = native(i)
+    do c = 1, 3
+      if (.not. any(cfgs == cfgname(c))) cycle
+      m(i)%h(c) = m(i)%make(cfgname(c))
+      if (m(i)%h(c) < 0) error stop 'remote_setup: no handle for ' // trim(m(i)%name) // ' ' // cfgname(c)
+      ns = merge(9, 6, c == 3)
+      call m(i)%evaluate(m(i)%h(c), nwarm, f, stress, ns, tangent, ns*ns)
+      if (any(.not. ieee_is_finite(tangent(:ns*ns*nwarm))) .or. maxval(abs(stress(:ns*nwarm))) > 1e-12_dp) &
+        & error stop 'remote_setup: ' // trim(m(i)%name) // ' ' // cfgname(c) // ' fails at F = I'
+    end do
+  end do
+end subroutine remote_setup
+
+subroutine remote_ref(self, n, f, s, c)
+  class(remote_material), intent(in) :: self
+  integer, intent(in) :: n
+  real(dp), intent(in) :: f(3,3,n)
+  real(dp), intent(out) :: s(6,n), c(6,6,n)
+  call self%evaluate(self%h(1), n, f, s, 6, c, 36)
+end subroutine remote_ref
+
+subroutine remote_cur(self, n, f, s, c)
+  class(remote_material), intent(in) :: self
+  integer, intent(in) :: n
+  real(dp), intent(in) :: f(3,3,n)
+  real(dp), intent(out) :: s(6,n), c(6,6,n)
+  call self%evaluate(self%h(2), n, f, s, 6, c, 36)
+end subroutine remote_cur
+
+subroutine remote_mix(self, n, f, p, a)
+  class(remote_material), intent(in) :: self
+  integer, intent(in) :: n
+  real(dp), intent(in) :: f(3,3,n)
+  real(dp), intent(out) :: p(3,3,n), a(9,9,n)
+  call self%evaluate(self%h(3), n, f, p, 9, a, 81)
+end subroutine remote_mix
 
 function material_set(lam, mu) result(m)
   !! every model, with parameters that give the same small-strain Lame constants lam, mu
