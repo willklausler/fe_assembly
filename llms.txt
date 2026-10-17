@@ -1,0 +1,168 @@
+# fe_assembly
+
+> Fortran modules `tensors`, `materials`, `materials_ad`, `elements` and `harness`: element residual R and consistent tangent K for finite-deformation hyperelasticity (Saint Venant-Kirchhoff, Neo-Hooke, modified Neo-Hooke, Mooney-Rivlin) in the total Lagrangian, updated Lagrangian and two-point configurations, with materials evaluated by hand-derived Fortran, by JAX automatic differentiation exported to Fortran, or remotely (embedded Python, socket server). Fortran 2008/2018, fpm. This file is the complete API reference for tools and coding agents; it is checked against the source in CI.
+
+Use: `use elements`, `use materials` (and `cubatures`, `shapefuncs` for the element); `use harness` only in tests and benches.
+fpm dependency: `fe_assembly = { git = "https://github.com/willklausler/fe_assembly" }` (no release yet; pin a commit with `rev = "..."`).
+Kinds are not exported: all reals are `real64` from `iso_fortran_env`.
+
+## Conventions (read first)
+
+- Configurations, each computed in its own quantities (no push-forward or pull-back between them): `ref` total Lagrangian (C, S, CC), `cur` updated Lagrangian (b, sigma, cc; dN/dx and dv from the current coordinates), `mix` two-point (F, P, AA). For a hyperelastic material all three give the same R and the same symmetric K.
+- Storage: `ref` and `cur` stresses are Voigt vectors s(6), tangents c(6,6); `mix` stresses p(3,3), tangents a(9,9). Voigt order 11, 22, 33, 12, 23, 13; stress-like vectors hold components, strain-like ones 2 E_12, so 6x6 tangents hold tensor components unscaled. Two-point index (i, J) -> i + 3 (J - 1).
+- Tensor notation (Holzapfel): (A (x)bar B)_ijkl = A_ik B_jl, (A (x)under B)_ijkl = A_il B_jk. cc is J^-1 times the tangent of the Truesdell rate of tau, not d sigma/d b.
+- Elements: nodal arrays (3, nnodes), R(3 nnodes), K(3 nnodes, 3 nnodes), dof 3 (a - 1) + i. Any element of fortran_shapefuncs; the cubature and shape functions are built once and shared. K is assembled in 3x3 node blocks and mirrored, so it is symmetric by construction (hyperelastic materials only).
+- Material evaluation is batched: an element gathers F at all its cubature points and calls `mat%ref|cur|mix` once.
+- Parameters: `material_set(lam, mu)` gives all four models with the same small-strain Lame constants: svk and nh `[lam, mu]`, mnh `[kappa, mu]`, mr `[c1, c2, kappa]` with kappa = lam + 2 mu/3, c1 = 3 mu/8, c2 = mu/8.
+- Error policy: elements check det F > 0 and a positive reference Jacobian at every point and return the optional `status` (`ELEM_OK`, `ELEM_INVERTED`, `ELEM_DEGENERATE`) with R = K = 0; without `status` a bad element stops. Material routines assume det F > 0 and do not check. Misuse in setup stops with `error stop` and a message naming the procedure.
+
+## Elements (module `elements`)
+
+| Call | Result |
+|---|---|
+| `call elem_ref(q, s, xref, u, mat, r, k [, status])` | total Lagrangian: R = int B^T S dV, K = int (B^T CC B + geometric) dV |
+| `call elem_cur(q, s, xref, u, mat, r, k [, status])` | updated Lagrangian: R = int B^T sigma dv, K = int (B^T cc B + geometric) dv |
+| `call elem_mix(q, s, xref, u, mat, r, k [, status])` | two-point: R = int P : grad N dV, K_aibk = int N_a,J AA_iJkL N_b,L dV |
+| `call shape_gradients(q, s, g, x, dndx, dv)` | dN/dx(3, nnodes) and volume weight at point g for nodal coordinates x (reference coordinates give dN/dX, dV) |
+| `ELEM_OK`, `ELEM_INVERTED`, `ELEM_DEGENERATE` | status values 0, 1 (det F <= 0 at a point), 2 (degenerate reference element) |
+
+`q` is a `cubature`, `s` a `shapefunc`, `mat` any `class(material)`.
+
+## Materials (module `materials`)
+
+| Call | Result |
+|---|---|
+| `type(material)` | `name`, `par(:)`, per-point procedure pointers `energy`, `ref_pt`, `cur_pt`, `mix_pt`, and batched methods |
+| `call mat%ref(n, f, s, c)` | S(6,n), CC(6,6,n) at F(3,3,n) |
+| `call mat%cur(n, f, s, c)` | sigma(6,n), cc(6,6,n) |
+| `call mat%mix(n, f, p, a)` | P(3,3,n), AA(9,9,n) |
+| `material_set(lam, mu)` | `type(material) :: m(4)`: svk, nh, mnh, mr |
+| `cfgname` | `['ref', 'cur', 'mix']` |
+| `<model>_energy(f, par)` | strain energy per reference volume, for `<model>` = `svk`, `nh`, `mnh`, `mr` |
+| `call <model>_ref(f, par, s, c)`, `<model>_cur`, `<model>_mix` | per-point routines: `svk_ref`, `svk_cur`, `svk_mix`, `nh_ref`, `nh_cur`, `nh_mix`, `mnh_ref`, `mnh_cur`, `mnh_mix`, `mr_ref`, `mr_cur`, `mr_mix`; energies `svk_energy`, `nh_energy`, `mnh_energy`, `mr_energy` |
+| `energy_function`, `voigt_material`, `twopoint_material` | abstract interfaces of the per-point routines |
+| `type, extends(remote_material)` | a material evaluated elsewhere: extensions supply `make` (a handle per configuration from `name`, `par`) and `evaluate` (one call for n points); the handles `h(3)` and the batched methods are inherited |
+| `call remote_setup(m, lam, mu, cfgs, nwarm)` | the `material_set` models with handles for `cfgs`, each compiled and verified once (stress-free, finite tangent at F = I) for batches of `nwarm` |
+
+Energies: svk lam/2 (tr E)^2 + mu tr E^2; nh mu/2 (I1 - 3) - mu ln J + lam/2 (ln J)^2; mnh mu/2 (J^(-2/3) I1 - 3) + U(J); mr c1 (J^(-2/3) I1 - 3) + c2 (J^(-4/3) I2 - 3) + U(J); U = kappa/4 (J^2 - 2 ln J - 1). Derivations: `notes/notes.typ`.
+
+## Materials exported from JAX (module `materials_ad`, generated)
+
+| Call | Result |
+|---|---|
+| `material_set_ad(lam, mu)` | the four models with stresses and tangents differentiated by JAX and exported as Fortran: no Python at run time; names `svk-ad`, `nh-ad`, `mnh-ad`, `mr-ad` |
+| `ad_<model>_<cfg>` | the per-point routines: `ad_svk_ref`, `ad_svk_cur`, `ad_svk_mix`, `ad_nh_ref`, `ad_nh_cur`, `ad_nh_mix`, `ad_mnh_ref`, `ad_mnh_cur`, `ad_mnh_mix`, `ad_mr_ref`, `ad_mr_cur`, `ad_mr_mix` |
+
+Generated by `jax/python/export_fortran.py` from `jax/python/fe_jax.py`; `--check` compares the recorded source hash.
+
+## Tensors (module `tensors`)
+
+| Call | Result |
+|---|---|
+| `eye3` | 3x3 identity |
+| `vi`, `vj` | Voigt index a holds component (vi(a), vj(a)) |
+| `det3(a)` | determinant |
+| `call inv3(a, b)` | b = a^-1 (adjugate) |
+| `call voigt(t, v)` | stress-like Voigt vector v(6) of a symmetric t(3,3) |
+
+## Test and bench support (module `harness`)
+
+| Call | Result |
+|---|---|
+| `call test_element(s, e, amp, xref, u)` | element e of a family of distorted unit-size elements, displacement amplitude amp |
+| `call element_gradients(q, s, xref, u, f)` | F at every cubature point |
+| `call assemble(c, q, s, xref, u, mat, r, k [, status])` | `elem_ref`, `elem_cur` or `elem_mix` for c = 1, 2, 3 |
+| `call make_element(opts, q, s)` | cubature and shape functions of `opts%element`, `opts%order`, `opts%degree` (0: 2 order) |
+| `element_name(s)` | `hex`, `tet`, `wedge`, ... |
+| `call check(cond, name)`, `close(x, y, rtol)`, `call check_summary()` | pass/fail counting; `close` for vectors and matrices; the summary stops with an error if a check failed |
+| `type(stopwatch)`, `start_watch(ntrial, clock)`, `sw%next()` | best of ntrial timings: `do while (sw%next()); call work(); end do; t = sw%best` |
+| `cpu_seconds()` | process CPU time |
+| `type(bench_options)`, `call parse_options(opts, description)` | the shared bench command line: `--nelem --ntrial --csv --tag --models --cfgs --paradigms --element --order --degree --help` |
+| `selected(name, list)` | name in a comma-separated list or the list is `all` |
+| `call csv_open(opts, unit)`, `call csv_row(unit, opts, s, paradigm, model, cfg, batch, quantity, value)` | CSV in long format: `paradigm,compiler,model,cfg,element,order,nnodes,npoints,batch,quantity,value` |
+| `call compare_paradigm(nat, rem, q, s, tol)` | checks that a paradigm gives the hand-derived stresses, tangents, R and K |
+| `call bench_paradigm(nat, rem, q, s, opts, clock, ping, label)` | table and CSV: first call, material time for batches of 1 point, 1 element, the mesh, element time |
+
+## Compiler notes
+
+Tested in CI with gfortran 14 (Linux, macOS, Windows), gfortran 13 (Linux), ifx 2026.1 (Linux, Windows), nvfortran 26.1 and LLVM flang 21 (Linux); locally with gfortran 14, ifx 2026.1 and nvfortran 26.3. The subpackages `jax/` and `socket/` are Linux only. Workarounds that shaped the code (heap temporaries in gfortran and nvfortran, trampolines under AddressSanitizer, nvfortran internal errors) are listed in AGENTS.md.
+
+## Differs from
+
+- FEAP user elements and materials: per-point material calls, one configuration, no cross-checks; this project's socket paradigm follows FEAP's Python-material architecture.
+- AceGen (Korelc): symbolic derivation and optimized code generation for Mathematica; `materials_ad` does the same from JAX traces, without Mathematica.
+- FEniCS (UFL), deal.II, MOOSE: complete finite element frameworks; here only element-level assembly, written to be measured.
+
+## Module layout
+
+`src/tensors.f90`, `src/materials.f90`, `src/materials_ad.f90` (generated, never edited), `src/elements.f90`, `src/harness.f90` (tests and benches only). The kernels use no `harness`.
+
+## Examples
+
+These are the programs in `example/`, compiled and run in CI.
+
+```fortran
+program demo_configurations
+  !! One Mooney-Rivlin hex8 element in the three configurations: the same R and symmetric K
+  use, intrinsic :: iso_fortran_env, only: dp => real64
+  use cubatures
+  use shapefuncs
+  use materials
+  use elements
+  implicit none
+  type(cubature) :: q
+  type(shapefunc) :: s
+  type(material) :: mats(4)
+  real(dp) :: x(3,8), u(3,8), r(24,3), k(24,24,3)
+  integer :: a
+
+  q = cubature(CUB_HEX, 2)                               ! full integration: 2x2x2 points
+  s = shapefunc(q, 1)                                    ! trilinear hexahedron
+  mats = material_set(1.2_dp, 0.8_dp)                    ! svk, nh, mnh, mr; Lame 1.2, 0.8
+  x = (s%coords + 1)/2                                   ! unit cube
+  do a = 1, 8
+    u(:,a) = [0.1_dp*x(1,a), -0.05_dp*x(2,a), 0.02_dp*x(3,a)*x(1,a)]
+  end do
+  call elem_ref(q, s, x, u, mats(4), r(:,1), k(:,:,1))   ! C, S, CC
+  call elem_cur(q, s, x, u, mats(4), r(:,2), k(:,:,2))   ! b, sigma, cc
+  call elem_mix(q, s, x, u, mats(4), r(:,3), k(:,:,3))   ! F, P, AA
+  print '(a, es9.1)', 'R: cur - ref', maxval(abs(r(:,2) - r(:,1)))         ! ~1e-16
+  print '(a, es9.1)', 'R: mix - ref', maxval(abs(r(:,3) - r(:,1)))         ! ~1e-16
+  print '(a, es9.1)', 'K: mix - ref', maxval(abs(k(:,:,3) - k(:,:,1)))     ! ~1e-16
+  print '(a, es9.1)', 'K - K^T', maxval(abs(k(:,:,3) - transpose(k(:,:,3))))   ! ~1e-16
+end program demo_configurations
+```
+
+```fortran
+program demo_inverted
+  !! A solver's use of the status flag: halve a displacement step until no point is inverted
+  use, intrinsic :: iso_fortran_env, only: dp => real64
+  use cubatures
+  use shapefuncs
+  use materials
+  use elements
+  implicit none
+  type(cubature) :: q
+  type(shapefunc) :: s
+  type(material) :: mats(4)
+  real(dp) :: x(3,8), du(3,8), r(24), k(24,24), step
+  integer :: status, cuts
+
+  q = cubature(CUB_HEX, 2)
+  s = shapefunc(q, 1)
+  mats = material_set(1.2_dp, 0.8_dp)
+  x = (s%coords + 1)/2                                   ! unit cube
+  du = 0
+  du(3,:) = -1.6_dp*x(3,:)                               ! height to -60%: det F = -0.6
+  step = 1
+  cuts = 0
+  do
+    call elem_mix(q, s, x, step*du, mats(2), r, k, status)   ! Neo-Hooke, two-point
+    if (status == ELEM_OK) exit
+    step = step/2                                        ! ELEM_INVERTED: R = K = 0
+    cuts = cuts + 1
+  end do
+  print '(a, i0, a, f6.3)', 'cuts: ', cuts, ', step: ', step   ! cuts: 1, step:  0.500
+  print '(a, es10.3)', 'max |R|: ', maxval(abs(r))            ! max |R|:  3.374E+00
+end program demo_inverted
+```

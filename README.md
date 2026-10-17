@@ -19,7 +19,7 @@ mats = material_set(1.2_dp, 0.8_dp)     ! svk, nh, mnh, mr with Lame constants 1
 call elem_mix(q, s, xref, u, mats(4), r, k)   ! Mooney-Rivlin: R(24) = int P : grad N, K(24,24)
 ```
 
-> Coding agents: contributor instructions are in [AGENTS.md](AGENTS.md).
+> Coding agents: the complete API reference is [llms.txt](llms.txt), and contributor instructions are in [AGENTS.md](AGENTS.md).
 
 ## Features
 
@@ -54,6 +54,8 @@ jax/run.sh run --profile release    # native versus embedded JAX: first-call, ba
 
 ## Documentation
 
+- [llms.txt](llms.txt): the complete API reference, checked against the source in CI.
+- [example/](example/): demo programs (`fpm run --example --all`).
 - [notes/notes.typ](notes/notes.typ): derivations (`typst compile notes/notes.typ`).
 - [AGENTS.md](AGENTS.md): layout, commands and decided conventions.
 - [CHANGELOG.md](CHANGELOG.md).

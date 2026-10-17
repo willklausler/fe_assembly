@@ -1,6 +1,6 @@
 #!/bin/bash
 # Local multi-compiler check: test in both profiles with every compiler
-# found on PATH, then run the app; then the jax/ and socket/ paradigm tests
+# found on PATH, then run the examples and the app; check the generated file and llms.txt; then the jax/ and socket/ paradigm tests
 # if .venv (with JAX) exists. Compilers not found are listed, not hidden.
 # GitHub Actions (.github/workflows/ci.yml) covers more platforms.
 
@@ -15,6 +15,7 @@ for FC in gfortran ifx nvfortran flang; do
     for PROFILE in debug release; do
         echo "--- $FC $PROFILE"
         if fpm test --compiler "$FC" --profile "$PROFILE" \
+            && fpm run --compiler "$FC" --profile "$PROFILE" --example --all > /dev/null \
             && fpm run --compiler "$FC" --profile "$PROFILE" -- --nelem 50 --ntrial 1 > /dev/null; then
             echo "✅ $FC $PROFILE"
         else
@@ -25,6 +26,7 @@ done
 
 # the committed generated file matches its generator (hash; needs only python3)
 python3 jax/python/export_fortran.py --check || FAILED+=("src/materials_ad.f90 stale")
+python3 tools/check_docs.py || FAILED+=("llms.txt")
 
 if [ -x .venv/bin/python ]; then
     echo "--- jax/ and socket/ (gfortran release)"

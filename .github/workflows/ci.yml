@@ -44,8 +44,10 @@ jobs:
         run: fpm test --compiler ${{ steps.setup-fortran.outputs.fc }} --profile debug
       - name: Test (release)
         run: fpm test --compiler ${{ steps.setup-fortran.outputs.fc }} --profile release
-      - name: App
-        run: fpm run --compiler ${{ steps.setup-fortran.outputs.fc }} --profile release -- --nelem 50 --ntrial 1
+      - name: Examples and app
+        run: |
+          fpm run --compiler ${{ steps.setup-fortran.outputs.fc }} --profile release --example --all
+          fpm run --compiler ${{ steps.setup-fortran.outputs.fc }} --profile release -- --nelem 50 --ntrial 1
 
   flang:
     name: ubuntu-24.04 LLVM flang 21
@@ -65,13 +67,17 @@ jobs:
         run: fpm test --compiler flang-21 --profile debug
       - name: Test (release)
         run: fpm test --compiler flang-21 --profile release
-      - name: App
-        run: fpm run --compiler flang-21 --profile release -- --nelem 50 --ntrial 1
+      - name: Examples and app
+        run: |
+          fpm run --compiler flang-21 --profile release --example --all
+          fpm run --compiler flang-21 --profile release -- --nelem 50 --ntrial 1
 
   checks:
-    name: generated files
+    name: generated files, llms.txt
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - name: src/materials_ad.f90 matches its generator (hash check, no JAX needed)
         run: python3 jax/python/export_fortran.py --check
+      - name: llms.txt covers the public API and the examples
+        run: python3 tools/check_docs.py

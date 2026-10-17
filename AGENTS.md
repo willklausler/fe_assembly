@@ -3,6 +3,7 @@
 Instructions for coding agents working on this repository. It is a study and
 benchmark project, not a library: it assembles element residuals and tangents
 for finite-deformation hyperelasticity and measures how fast each approach is.
+The API and its conventions are in `llms.txt`; read it before changing behaviour.
 It follows the maintainer's Fortran package standard (`~/manage_packages.md`)
 except where "Deviations from the package standard" below says otherwise.
 
@@ -16,7 +17,10 @@ except where "Deviations from the package standard" below says otherwise.
 | `src/elements.f90` | Element R and K per configuration (`elem_ref/_cur/_mix`) |
 | `src/harness.f90` | Test and bench support (test elements, checks, stopwatch, paradigm checks and table); never used by the kernels |
 | `test/test_fe_assembly.f90` | The test program |
+| `example/demo_*.f90` | Demo programs; each is copied verbatim into `llms.txt` |
+| `llms.txt` | Complete API reference for agents; `tools/check_docs.py` checks it in CI |
 | `app/main.f90` | `bench`, the fpm app: element R and K and the material call alone, native and JAX-exported; table and CSV |
+| `tools/check_docs.py` | CI check: every public name and example is in `llms.txt` |
 | `tools/sweep.py` | Runs every bench for every compiler and paradigm into `results/<timestamp>/`: CSV, `env.json`, `summary.md`, plots |
 | `notes/notes.typ` | Typst notes: notation, general relations, element R and K; includes the models |
 | `notes/<model>.typ` | Stress and tangent of one material model in the three configurations |
@@ -32,8 +36,6 @@ except where "Deviations from the package standard" below says otherwise.
 | `.github/workflows/ci.yml` | GitHub CI: compiler × OS matrix |
 | `CLAUDE.local.md` | Maintainer's goal and specification; gitignored |
 
-Directories that come with later work, created when first needed: `example/`.
-
 ## Commands
 
 ```sh
@@ -47,6 +49,8 @@ fpm run --profile release -- -e tet -p 2   # element hex|tet|wedge, order p, sta
 perf stat -e cycles,instructions $(fpm run --profile release --runner echo)   # IPC
 ./ci.sh                              # every installed compiler, both profiles; jax/ and socket/ if .venv exists
 python3 jax/python/export_fortran.py --check   # generated file is current (no JAX needed)
+python3 tools/check_docs.py          # llms.txt covers every public name and example
+fpm run --example --all              # the demos
 typst compile notes/notes.typ build/notes/notes.pdf   # notes; output is not committed
 (cd jax && ../.venv/bin/python python/export_fortran.py)   # regenerate src/materials_ad.f90 after editing an energy
 jax/run.sh test --profile release    # JAX paradigm: AD against closed forms (needs ../.venv with jax)
@@ -55,8 +59,8 @@ jax/run.sh run --profile release     # native versus JAX: JIT, batch 1 / 8 / mes
 (cd socket && fpm run --profile release)   # native versus socket server
 ```
 
-Done means: the tests pass for every compiler you have in both profiles, and
-the app runs.
+Done means: the tests pass for every compiler you have in both profiles, the
+examples and the app run, and `tools/check_docs.py` passes (`./ci.sh` does all).
 
 ## Decided conventions (do not change without the maintainer)
 
@@ -106,7 +110,8 @@ the app runs.
 2. Derive the stresses and tangents per configuration in `notes/<model>.typ` and check them with
    automatic differentiation before writing Fortran.
 3. Add the per-point routines `<model>_energy/_ref/_cur/_mix` to `src/materials.f90` and an entry in
-   `material_set`, with parameters matched to the small-strain Lame constants.
+   `material_set`, with parameters matched to the small-strain Lame constants; document them in
+   `llms.txt` (`tools/check_docs.py` requires every public name).
 4. The test then covers the model automatically (finite differences, configurations, AD export,
    rigid rotation, small strain); run `./ci.sh` and update `CHANGELOG.md`.
 
@@ -139,7 +144,7 @@ the app runs.
 
 - Several modules in `src/`, one per concern (tensors, materials, generated materials, elements, harness), instead of one module per package: the sweep is 4 materials × 3 configurations × several evaluation paradigms.
 - Two subpackages, `jax/` and `socket/`, keep Python out of the main package and its CI.
-- Not yet published (no release, Zenodo, Pages): no `llms.txt`, `tools/check_docs.py`, man page, `CITATION.cff`, `CONTRIBUTING.md`, `ford.md`, `docs.yml` or `Makefile`. Add them when the maintainer decides to publish.
+- Not yet published (no release, Zenodo, Pages): no man page, `CITATION.cff`, `CONTRIBUTING.md`, `ford.md`, `docs.yml` or `Makefile`. Add them when the maintainer decides to publish. `llms.txt` and `tools/check_docs.py` exist.
 - FLAP (pinned v2.5.3; it pins neither FACE nor PENF) parses the bench command lines. stdlib and
   fplotlib remain planned; plots come from matplotlib in `tools/sweep.py`.
 
