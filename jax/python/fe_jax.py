@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Hyperelastic stresses and tangents by automatic differentiation of the energy.
 
 Each model is one energy Psi(I1, I2, J, par) in the invariants; par has the same

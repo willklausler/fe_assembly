@@ -67,3 +67,11 @@ jobs:
         run: fpm test --compiler flang-21 --profile release
       - name: App
         run: fpm run --compiler flang-21 --profile release -- 50 1
+
+  checks:
+    name: generated files
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: src/materials_ad.f90 matches its generator (hash check, no JAX needed)
+        run: python3 jax/python/export_fortran.py --check

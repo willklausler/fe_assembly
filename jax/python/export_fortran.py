@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Export the JAX-differentiated materials as plain Fortran: ../../src/materials_ad.f90.
 
 JAX traces and differentiates each energy Psi(I1, I2, J) per configuration (fe_jax.FULL);
@@ -7,13 +8,46 @@ names; constants fold (the iota/eq masks of trace and eye, multiplications by 0 
 identical statements are shared and unused ones dropped. The generated routines have the
 per-point interfaces of src/materials.f90, so no Python or XLA is needed at run time.
 
-Usage (from jax/): ../.venv/bin/python python/export_fortran.py
+The generated header records a hash of this script and fe_jax.py; --check compares it
+without importing JAX (exit status 1 if the committed file is stale), so CI can run it.
+
+Usage (from jax/): ../.venv/bin/python python/export_fortran.py [--check]
 """
+import hashlib
 import os
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, "..", "..", "src", "materials_ad.f90")
+SOURCES = [os.path.join(HERE, "fe_jax.py"), os.path.abspath(__file__)]
+HASH_TAG = "! Source hash: "
+
+
+def source_hash():
+    """First 16 hex digits of sha256 over the generator sources."""
+    h = hashlib.sha256()
+    for path in SOURCES:
+        with open(path, "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()[:16]
+
+
+def check():
+    """0 if src/materials_ad.f90 was generated from the current sources, else 1."""
+    with open(OUT) as fh:
+        recorded = next((line[len(HASH_TAG):].split()[0] for line in fh if line.startswith(HASH_TAG)), None)
+    if recorded == source_hash():
+        print("src/materials_ad.f90 is current")
+        return 0
+    print("src/materials_ad.f90 is stale: run jax/python/export_fortran.py and commit it", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__" and "--check" in sys.argv:
+    sys.exit(check())
+
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, HERE)
 
 import numpy as np  # noqa: E402
 import jax  # noqa: E402
@@ -21,7 +55,6 @@ from jax.extend import core as jcore  # noqa: E402
 
 import fe_jax  # noqa: E402
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src", "materials_ad.f90")
 NPAR = {"svk": 2, "nh": 2, "mnh": 2, "mr": 3}
 VI, VJ = fe_jax.VI, fe_jax.VJ
 
@@ -296,6 +329,7 @@ def main():
 ! ======================================================================
 ! GENERATED FILE - DO NOT EDIT. Edit jax/python/fe_jax.py (the energies) or
 ! jax/python/export_fortran.py and run it (needs JAX; see AGENTS.md).
+{HASH_TAG}{source_hash()} (sha256 of fe_jax.py and export_fortran.py)
 ! ======================================================================
 module materials_ad
   !! The four material models with stresses and tangents differentiated by JAX

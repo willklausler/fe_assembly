@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Material server for the socket paradigm: fe_jax behind a TCP socket.
 
 One client, synchronous request/response, native byte order (same machine).

@@ -2,6 +2,7 @@
 ! ======================================================================
 ! GENERATED FILE - DO NOT EDIT. Edit jax/python/fe_jax.py (the energies) or
 ! jax/python/export_fortran.py and run it (needs JAX; see AGENTS.md).
+! Source hash: 4ec86e69e792fe0e (sha256 of fe_jax.py and export_fortran.py)
 ! ======================================================================
 module materials_ad
   !! The four material models with stresses and tangents differentiated by JAX

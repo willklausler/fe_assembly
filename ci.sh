@@ -23,6 +23,9 @@ for FC in gfortran ifx nvfortran flang; do
     done
 done
 
+# the committed generated file matches its generator (hash; needs only python3)
+python3 jax/python/export_fortran.py --check || FAILED+=("src/materials_ad.f90 stale")
+
 if [ -x .venv/bin/python ]; then
     echo "--- jax/ and socket/ (gfortran release)"
     jax/run.sh test --profile release && echo "✅ jax" || FAILED+=("jax")
