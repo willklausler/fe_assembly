@@ -8,7 +8,7 @@ program test_fe_assembly
   use tensors, only: eye3, det3, inv3
   use materials, only: material, material_set, cfgname
   use materials_ad, only: material_set_ad
-  use elements, only: shape_gradients
+  use elements, only: shape_gradients, ELEM_INVERTED
   use harness, only: test_element, assemble, check, close, check_summary, compare_paradigm
   implicit none
   real(dp), parameter :: eps = epsilon(1._dp), tol = 64*eps, fdtol = 64*sqrt(eps)
@@ -23,7 +23,7 @@ program test_fe_assembly
   type(material) :: mat
   real(dp) :: xref(3,8), u(3,8), urot(3,8), rot(3,3), w(3,3), jac(3,3), vol(2)
   real(dp) :: r(24,3), k(24,24,3), rfd(24), kfd(24,24), up(3,8), rp(24), rm(24), kk(24,24), k0(24,24)
-  integer :: c, j, m, g
+  integer :: c, j, m, g, stat
   character(:), allocatable :: id
 
   ! Dependencies: trilinear hexahedron ------------------------------------
@@ -102,6 +102,10 @@ program test_fe_assembly
       call check(close([kk], [k0], tol), id // 'K at u = 0 equals the small-strain K of ' // trim(mats(1)%name))
       call assemble(c, q, s, xref, urot, mat, rp, kk)
       call check(maxval(abs(rp)) < tol*maxval(abs(kk)), id // 'R = 0 under rigid rotation')
+      ! x = -X: det F = -1 everywhere; the element reports it instead of stopping
+      call assemble(c, q, s, xref, -2*xref, mat, rp, kk, stat)
+      call check(stat == ELEM_INVERTED .and. all(rp == 0) .and. all(kk == 0), &
+        & id // 'inverted element: status, R = K = 0')
     end do
   end do
 

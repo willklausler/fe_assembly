@@ -102,7 +102,7 @@ subroutine element_gradients(q, s, xref, u, f)
   end do
 end subroutine element_gradients
 
-subroutine assemble(c, q, s, xref, u, mat, r, k)
+subroutine assemble(c, q, s, xref, u, mat, r, k, status)
   !! element R and K in configuration c (1 ref, 2 cur, 3 mix)
   integer, intent(in) :: c
   type(cubature), intent(in) :: q
@@ -110,13 +110,15 @@ subroutine assemble(c, q, s, xref, u, mat, r, k)
   real(dp), intent(in) :: xref(:,:), u(:,:)
   class(material), intent(in) :: mat
   real(dp), intent(out) :: r(:), k(:,:)
+  integer, intent(out), optional :: status
+    !! as elements: ELEM_OK, ELEM_INVERTED, ELEM_DEGENERATE; without it a bad element stops
   select case (c)
   case (1)
-    call elem_ref(q, s, xref, u, mat, r, k)
+    call elem_ref(q, s, xref, u, mat, r, k, status)
   case (2)
-    call elem_cur(q, s, xref, u, mat, r, k)
+    call elem_cur(q, s, xref, u, mat, r, k, status)
   case default
-    call elem_mix(q, s, xref, u, mat, r, k)
+    call elem_mix(q, s, xref, u, mat, r, k, status)
   end select
 end subroutine assemble
 

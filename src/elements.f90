@@ -10,6 +10,10 @@ module elements
   !! which assumes a symmetric K (hyperelastic materials).
   !! Each element routine runs in two passes: kinematics at every point, one
   !! batched material call, then assembly.
+  !! The kinematics pass is the only check: status = 1 if det F <= 0 at a point (an
+  !! inverted element, e.g. a Newton step too large), 2 if the reference element is
+  !! degenerate; then R = K = 0 and the material is not called. Without the optional
+  !! status argument such an element stops with error stop.
   use, intrinsic :: iso_fortran_env, only: dp => real64
   use cubatures, only: cubature
   use shapefuncs, only: shapefunc
@@ -19,6 +23,14 @@ module elements
   private
 
   public :: elem_ref, elem_cur, elem_mix, shape_gradients
+  public :: ELEM_OK, ELEM_INVERTED, ELEM_DEGENERATE
+
+  integer, parameter :: ELEM_OK = 0
+    !! status: R and K computed
+  integer, parameter :: ELEM_INVERTED = 1
+    !! status: det F <= 0 at a cubature point; R = K = 0
+  integer, parameter :: ELEM_DEGENERATE = 2
+    !! status: the reference element has det(dX/dxi) <= 0 at a cubature point; R = K = 0
 
 contains
 
@@ -140,22 +152,52 @@ pure subroutine mirror(k)
   end do
 end subroutine mirror
 
-subroutine elem_ref(q, s, xref, u, mat, r, k)
+subroutine check_point(reference_ok, current_ok, caller, r, k, status, bad)
+  ! the kinematics check: bad (and R = K = 0, status set or error stop) for a bad element
+  logical, intent(in) :: reference_ok, current_ok
+  character(*), intent(in) :: caller
+  real(dp), intent(inout) :: r(:), k(:,:)
+  integer, intent(out), optional :: status
+  logical, intent(out) :: bad
+  character(:), allocatable :: msg
+  bad = .not. (reference_ok .and. current_ok)
+  if (.not. bad) return
+  r = 0
+  k = 0
+  if (present(status)) then
+    status = merge(ELEM_INVERTED, ELEM_DEGENERATE, reference_ok)
+    return
+  end if
+  if (reference_ok) then
+    msg = caller // ': det F <= 0 at a cubature point (inverted element)'
+  else
+    msg = caller // ': degenerate reference element'
+  end if
+  error stop msg
+end subroutine check_point
+
+subroutine elem_ref(q, s, xref, u, mat, r, k, status)
   !! total Lagrangian: R = int B^T S dV, K = int (B^T CC B + geometric(S)) dV
   type(cubature), intent(in) :: q
   type(shapefunc), intent(in) :: s
   real(dp), intent(in) :: xref(:,:), u(:,:)
   class(material), intent(in) :: mat
   real(dp), intent(out) :: r(:), k(:,:)
+  integer, intent(out), optional :: status
+    !! ELEM_OK, ELEM_INVERTED or ELEM_DEGENERATE; without it a bad element stops
   real(dp) :: dndx(3, s%nnodes, q%npoints), dv(q%npoints), f(3,3,q%npoints)
   real(dp) :: sv(6, q%npoints), cv(6,6,q%npoints), bm(6, 3*s%nnodes)
+  logical :: bad
   integer :: g
   r = 0
   k = 0
   do g = 1, q%npoints
     call shape_gradients(q, s, g, xref, dndx(:,:,g), dv(g))
     f(:,:,g) = grad_u(u, dndx(:,:,g))
+    call check_point(dv(g) > 0, det3(f(:,:,g)) > 0, 'elem_ref', r, k, status, bad)
+    if (bad) return
   end do
+  if (present(status)) status = ELEM_OK
   call mat%ref(q%npoints, f, sv, cv)
   do g = 1, q%npoints
     call bmatrix(f(:,:,g), dndx(:,:,g), bm)
@@ -164,15 +206,18 @@ subroutine elem_ref(q, s, xref, u, mat, r, k)
   call mirror(k)
 end subroutine elem_ref
 
-subroutine elem_cur(q, s, xref, u, mat, r, k)
+subroutine elem_cur(q, s, xref, u, mat, r, k, status)
   !! updated Lagrangian: R = int B^T sigma dv, K = int (B^T cc B + geometric(sigma)) dv
   type(cubature), intent(in) :: q
   type(shapefunc), intent(in) :: s
   real(dp), intent(in) :: xref(:,:), u(:,:)
   class(material), intent(in) :: mat
   real(dp), intent(out) :: r(:), k(:,:)
+  integer, intent(out), optional :: status
+    !! ELEM_OK, ELEM_INVERTED or ELEM_DEGENERATE; without it a bad element stops
   real(dp) :: x(3, s%nnodes), dndx(3, s%nnodes, q%npoints), dv(q%npoints), f(3,3,q%npoints)
   real(dp) :: sv(6, q%npoints), cv(6,6,q%npoints), bm(6, 3*s%nnodes), fi(3,3)
+  logical :: bad
   integer :: g, a, jj
   r = 0
   k = 0
@@ -187,8 +232,12 @@ subroutine elem_cur(q, s, xref, u, mat, r, k)
         fi(:,jj) = fi(:,jj) - u(:,a)*dndx(jj,a,g)
       end do
     end do
+    ! the current volume weight and det F^-1 > 0 both say the element is not inverted
+    call check_point(.true., dv(g) > 0 .and. det3(fi) > 0, 'elem_cur', r, k, status, bad)
+    if (bad) return
     call inv3(fi, f(:,:,g))
   end do
+  if (present(status)) status = ELEM_OK
   call mat%cur(q%npoints, f, sv, cv)
   do g = 1, q%npoints
     ! ponytail: dense B with F = I spends half its work on zeros; a sparse spatial B if cur matters
@@ -198,22 +247,28 @@ subroutine elem_cur(q, s, xref, u, mat, r, k)
   call mirror(k)
 end subroutine elem_cur
 
-subroutine elem_mix(q, s, xref, u, mat, r, k)
+subroutine elem_mix(q, s, xref, u, mat, r, k, status)
   !! two-point: R = int P : grad N dV, K_aibk = int N_a,J A_iJkL N_b,L dV (geometric term inside AA)
   type(cubature), intent(in) :: q
   type(shapefunc), intent(in) :: s
   real(dp), intent(in) :: xref(:,:), u(:,:)
   class(material), intent(in) :: mat
   real(dp), intent(out) :: r(:), k(:,:)
+  integer, intent(out), optional :: status
+    !! ELEM_OK, ELEM_INVERTED or ELEM_DEGENERATE; without it a bad element stops
   real(dp) :: dndx(3, s%nnodes, q%npoints), dv(q%npoints), f(3,3,q%npoints)
   real(dp) :: p(3,3,q%npoints), am(9,9,q%npoints), w(9,3)
+  logical :: bad
   integer :: g, a, b, i, kk, ia, ib
   r = 0
   k = 0
   do g = 1, q%npoints
     call shape_gradients(q, s, g, xref, dndx(:,:,g), dv(g))
     f(:,:,g) = grad_u(u, dndx(:,:,g))
+    call check_point(dv(g) > 0, det3(f(:,:,g)) > 0, 'elem_mix', r, k, status, bad)
+    if (bad) return
   end do
+  if (present(status)) status = ELEM_OK
   call mat%mix(q%npoints, f, p, am)
   do g = 1, q%npoints
     do a = 1, s%nnodes

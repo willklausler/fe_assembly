@@ -11,7 +11,8 @@ module materials
   !! remote_material and supply only make (a handle per configuration) and evaluate;
   !! remote_setup compiles and verifies every handle once, so calls carry no checks.
   !! Formulas and notation: notes/notes.typ.
-  !! Models with ln J stop with error stop when det F <= 0 (an inverted element).
+  !! Precondition: det F > 0. The elements check it once per point and return a status;
+  !! the material routines do not re-check (ln J of an inverted element would be NaN).
   use, intrinsic :: iso_fortran_env, only: dp => real64
   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
   use tensors, only: eye3, vi, vj, det3, inv3, voigt
@@ -306,15 +307,6 @@ pure subroutine add_under9(m, coef, a, b)
   end do
 end subroutine add_under9
 
-pure function detf(f, caller) result(j)
-  ! det F, stopping on an inverted element
-  real(dp), intent(in) :: f(3,3)
-  character(*), intent(in) :: caller
-  real(dp) :: j
-  j = det3(f)
-  if (j <= 0) error stop caller // ': det F <= 0'
-end function detf
-
 pure function iso4(x, lam, mu) result(c)
   ! Voigt form of lam X (x) X + mu (X (x)bar X + X (x)under X)
   real(dp), intent(in) :: x(3,3), lam, mu
@@ -394,7 +386,7 @@ pure function nh_energy(f, par) result(w)
   !! strain energy per reference volume
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp) :: w, lnj
-  lnj = log(detf(f, 'nh_energy'))
+  lnj = log(det3(f))
   w = par(2)/2*(sum(f*f) - 3) - par(2)*lnj + par(1)/2*lnj**2
 end function nh_energy
 
@@ -403,7 +395,7 @@ pure subroutine nh_ref(f, par, s, c)
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
   real(dp) :: t3(3,3), ci(3,3), lnj
-  lnj = log(detf(f, 'nh_ref'))
+  lnj = log(det3(f))
   call inv3(matmul(transpose(f), f), ci)
   t3 = par(2)*(eye3 - ci) + par(1)*lnj*ci
   call voigt(t3, s)
@@ -417,7 +409,7 @@ pure subroutine nh_cur(f, par, s, c)
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
   real(dp) :: t3(3,3), j, lnj
-  j = detf(f, 'nh_cur')
+  j = det3(f)
   lnj = log(j)
   t3 = par(2)*(matmul(f, transpose(f)) - eye3) + par(1)*lnj*eye3
   call voigt(t3, s)
@@ -430,7 +422,7 @@ pure subroutine nh_mix(f, par, p, a)
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: p(3,3), a(9,9)
   real(dp) :: fi(3,3), fit(3,3), lnj
-  lnj = log(detf(f, 'nh_mix'))
+  lnj = log(det3(f))
   call inv3(f, fi)
   fit = transpose(fi)
   p = par(2)*(f - fit) + par(1)*lnj*fit
@@ -448,7 +440,7 @@ pure function mnh_energy(f, par) result(w)
   !! strain energy per reference volume
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp) :: w, j
-  j = detf(f, 'mnh_energy')
+  j = det3(f)
   w = par(2)/2*(j**(-2._dp/3)*sum(f*f) - 3) + par(1)/4*(j**2 - 2*log(j) - 1)
 end function mnh_energy
 
@@ -457,7 +449,7 @@ pure subroutine mnh_ref(f, par, s, c)
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
   real(dp) :: t3(3,3), ci(3,3), siso(3,3), j, i1, p, pt, g
-  j = detf(f, 'mnh_ref')
+  j = det3(f)
   call inv3(matmul(transpose(f), f), ci)
   i1 = sum(f*f)
   p = par(1)/2*(j - 1/j)
@@ -478,7 +470,7 @@ pure subroutine mnh_cur(f, par, s, c)
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
   real(dp) :: t3(3,3), bb(3,3), tiso(3,3), j, p, pt, trbb
-  j = detf(f, 'mnh_cur')
+  j = det3(f)
   p = par(1)/2*(j - 1/j)
   pt = par(1)*j
   bb = j**(-2._dp/3)*matmul(f, transpose(f))
@@ -498,7 +490,7 @@ pure subroutine mnh_mix(f, par, p, a)
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: p(3,3), a(9,9)
   real(dp) :: fi(3,3), fit(3,3), j, i1, pr, pt, g
-  j = detf(f, 'mnh_mix')
+  j = det3(f)
   call inv3(f, fi)
   fit = transpose(fi)
   i1 = sum(f*f)
@@ -522,7 +514,7 @@ pure function mr_energy(f, par) result(w)
   !! strain energy per reference volume
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp) :: w, j, c(3,3), i1
-  j = detf(f, 'mr_energy')
+  j = det3(f)
   c = matmul(transpose(f), f)
   i1 = c(1,1) + c(2,2) + c(3,3)
   w = par(1)*(j**(-2._dp/3)*i1 - 3) + par(2)*(j**(-4._dp/3)*(i1**2 - sum(c*c))/2 - 3) &
@@ -535,7 +527,7 @@ pure subroutine mr_ref(f, par, s, c)
   real(dp), intent(out) :: s(6), c(6,6)
   real(dp) :: t3(3,3), cg(3,3), ci(3,3), cb(3,3), sbar(3,3), siso(3,3), d1(3,3)
   real(dp) :: j, j23, i1, p, pt, scc, k4, k2
-  j = detf(f, 'mr_ref')
+  j = det3(f)
   j23 = j**(-2._dp/3)
   cg = matmul(transpose(f), f)
   call inv3(cg, ci)
@@ -568,7 +560,7 @@ pure subroutine mr_cur(f, par, s, c)
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: s(6), c(6,6)
   real(dp) :: t3(3,3), bb(3,3), bb2(3,3), tbar(3,3), tiso(3,3), dbb(3,3), j, p, pt, i1b, trt, k4, k2
-  j = detf(f, 'mr_cur')
+  j = det3(f)
   p = par(3)/2*(j - 1/j)
   pt = par(3)*j
   bb = j**(-2._dp/3)*matmul(f, transpose(f))
@@ -599,7 +591,7 @@ pure subroutine mr_mix(f, par, p, a)
   real(dp), intent(in) :: f(3,3), par(:)
   real(dp), intent(out) :: p(3,3), a(9,9)
   real(dp) :: fi(3,3), fit(3,3), ft(3,3), b(3,3), cg(3,3), gi2(3,3), j, j23, j43, i1, i2, pr, pt, a1, a2
-  j = detf(f, 'mr_mix')
+  j = det3(f)
   j23 = j**(-2._dp/3)
   j43 = j23**2
   call inv3(f, fi)

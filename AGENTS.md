@@ -61,7 +61,11 @@ the app runs.
 
 - Kinds come from `iso_fortran_env`; all reals are `real64`.
 - Shape functions and cubatures come from fortran_shapefuncs and fortran_cubatures, pinned by tag.
-- Error policy: `error stop` with a message that starts with the procedure name.
+- Error policy: element routines return an optional `status` (`ELEM_OK`, `ELEM_INVERTED` for
+  det F <= 0 at a point, `ELEM_DEGENERATE` for a degenerate reference element) with R = K = 0, so
+  a nonlinear solver can cut its step; without `status` they stop. This kinematics check is the
+  only one: material routines assume det F > 0. Setup and API misuse use `error stop` with a
+  message that starts with the procedure name.
 - Tensor notation follows Holzapfel, with fourth-order products defined by index in `notes/notes.typ`:
   `(A ⊗̄ B)_ijkl = A_ik B_jl`, `(A ⊗̲ B)_ijkl = A_il B_jk`.
 - Each configuration is computed discretely in its own quantities: no code pushes forward or
