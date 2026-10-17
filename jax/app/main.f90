@@ -3,10 +3,10 @@ program bench_jax
   !! Native versus JAX material evaluation (harness%bench_paradigm).
   !! Usage: ./run.sh run --profile release [-- --help]
   use, intrinsic :: iso_fortran_env, only: dp => real64
-  use cubatures, only: cubature, CUB_HEX
+  use cubatures, only: cubature
   use shapefuncs, only: shapefunc
   use materials, only: material, material_set
-  use harness, only: bench_paradigm, bench_options, parse_options
+  use harness, only: bench_paradigm, bench_options, parse_options, make_element
   use jax_materials, only: jax_material, jax_init, jax_set, jax_finalize, jax_ping, wtime
   implicit none
   type(bench_options) :: opts
@@ -23,8 +23,7 @@ program bench_jax
   call get_environment_variable('FE_PYTHON', python, status=stat)
   if (stat /= 0) python = '../.venv/bin/python'
   call jax_init(python, 'python')
-  q = cubature(CUB_HEX, 2)
-  s = shapefunc(q, 1)
+  call make_element(opts, q, s)
   nat = material_set(1.2_dp, 0.8_dp)
   jx = jax_set(1.2_dp, 0.8_dp, ['ref', 'cur', 'mix'], q%npoints)
   call bench_paradigm(nat, jx, q, s, opts, wtime, jax_ping, 'jax')

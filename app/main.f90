@@ -5,12 +5,12 @@ program bench
   !! and the JAX-exported ones (export). Table on standard output, CSV with --csv.
   !! Usage: fpm run --profile release -- --help
   use, intrinsic :: iso_fortran_env, only: dp => real64
-  use cubatures, only: cubature, CUB_HEX
+  use cubatures, only: cubature
   use shapefuncs, only: shapefunc
   use materials, only: material, material_set, cfgname
   use materials_ad, only: material_set_ad
   use harness, only: test_element, element_gradients, assemble, stopwatch, start_watch, cpu_seconds, &
-    & bench_options, parse_options, selected, csv_open, csv_row
+    & bench_options, parse_options, selected, csv_open, csv_row, make_element, element_name
   implicit none
   character(*), parameter :: paradigm(2) = ['native', 'export']
   type(bench_options) :: opts
@@ -25,8 +25,7 @@ program bench
 
   call parse_options(opts, 'element R and K time per model and configuration, native and JAX-exported')
   nelem = opts%nelem
-  q = cubature(CUB_HEX, 2)
-  s = shapefunc(q, 1)
+  call make_element(opts, q, s)
   ! hand-derived models, then the same models exported from JAX; sections, not an
   ! array constructor: gfortran 14 leaks the allocatable components of function results in [ ... ]
   allocate(mats(8))
@@ -42,8 +41,8 @@ program bench
   end do
 
   call csv_open(opts, csv)
-  write(*, '(a, i0, a, i0, a, i0, a)') 'element: ', s%nnodes, ' nodes, ', nelem, ' elements, best of ', &
-    & opts%ntrial, ' trials, CPU time'
+  write(*, '(a, i0, a, i0, a, i0, a, i0, a)') element_name(s) // ', order ', s%order, ', ', q%npoints, &
+    & ' points, ', nelem, ' elements, best of ', opts%ntrial, ' trials, CPU time'
   write(*, '(a8, a5, a8, 3a12)') 'model', 'cfg', 'impl', 'element us', 'material ns', 'material %'
   do m = 1, size(mats)
     model = trim(mats(1 + mod(m - 1, 4))%name)

@@ -41,6 +41,7 @@ fpm test --profile debug             # fast check, gfortran
 fpm test --profile release
 fpm run --profile release            # benchmark: 2000 elements, best of 7 trials
 fpm run --profile release -- --help  # options: --nelem --ntrial --csv --tag --models --cfgs --paradigms
+fpm run --profile release -- -e tet -p 2   # element hex|tet|wedge, order p, standard integration (degree 2p)
 .venv/bin/python tools/sweep.py      # whole sweep: all compilers and paradigms, CSV, summary.md, plots
 .venv/bin/python tools/sweep.py --allocations   # also heap allocations per element (valgrind)
 perf stat -e cycles,instructions $(fpm run --profile release --runner echo)   # IPC
@@ -92,6 +93,9 @@ the app runs.
   in the package standard. Its header records a hash of the generator sources; CI and `ci.sh` run
   `export_fortran.py --check` (no JAX needed). Regenerate and commit it with every change to either
   source, including comments.
+- Benches build the element with `harness%make_element` from `--element`, `--order` and `--degree`
+  (default 2 order, the standard full integration). The test checks hex8, hex27, tet4, tet10 and
+  wedge6; test elements have unit size, with perturbation and displacement scaled by 1/order.
 - Every tangent is tested by central differences of the residual, and every residual by central
   differences of the element energy; R and K must agree across the three configurations.
 
@@ -123,6 +127,9 @@ the app runs.
   svk cur/mix and mr ref (measured with `tools/sweep.py --allocations`).
 - nvfortran 26.3 with `-Mstandard` emits FLAP's type descriptors twice (link failure): dropped from
   the nvfortran debug flags.
+- nvfortran 26.3 debug builds abort with an internal compiler error on array constructors of
+  runtime-sized matrix sections (`[k(:,:,c)]`): `harness%close` has a rank-2 version.
+- ifx rejects a local entity with the name of a module the scope uses (gfortran accepts it).
 - ifx's `system_clock` follows the wall clock, which WSL2 re-syncs with jumps: the native bench uses
   `cpu_time`, the paradigm benches `clock_gettime(CLOCK_MONOTONIC)`.
 - oneAPI `setvars.sh` silently does nothing when run twice in one environment: `ci.sh` uses `--force`

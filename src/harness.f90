@@ -13,7 +13,7 @@ module harness
   implicit none
   private
 
-  public :: test_element, element_gradients, assemble
+  public :: test_element, element_gradients, assemble, make_element, element_name
   public :: check, close, check_summary
   public :: stopwatch, start_watch, cpu_seconds
   public :: bench_options, parse_options, selected, csv_open, csv_row
@@ -21,6 +21,11 @@ module harness
 
   integer :: ncheck = 0, nfail = 0
     ! checks counted by check, reported by check_summary
+
+  interface close
+    !! max-norm comparison of x and y relative to the size of y, for vectors and matrices
+    module procedure close1, close2
+  end interface close
 
   abstract interface
     function clock_interface() result(t)
@@ -53,6 +58,12 @@ module harness
       !! comma-separated subset of ref, cur, mix
     character(64) :: paradigms = 'all'
       !! comma-separated subset of the paradigms a bench compares
+    character(8) :: element = 'hex'
+      !! hex, tet or wedge
+    integer :: order = 1
+      !! polynomial order of the shape functions
+    integer :: degree = 0
+      !! cubature degree; 0 means the standard full integration 2 order
   end type bench_options
 
   type :: stopwatch
@@ -74,19 +85,53 @@ contains
 !-----------------------------------------------------------------------
 
 subroutine test_element(s, e, amp, xref, u)
-  !! element e of a family of distorted reference elements, with displacement amplitude amp
+  !! element e of a family of distorted unit-size elements of the type of s, with displacement
+  !! amplitude amp; node perturbation and displacement scale with the node spacing 1/order
   type(shapefunc), intent(in) :: s
   integer, intent(in) :: e
   real(dp), intent(in) :: amp
   real(dp), intent(out) :: xref(3, s%nnodes), u(3, s%nnodes)
+  real(dp) :: lo, h
   integer :: a, i
+  lo = minval(s%coords)
+  h = 1/real(max(s%order, 1), dp)
   do a = 1, s%nnodes
     do i = 1, 3
-      xref(i,a) = (s%coords(i,a) + 1)/2 + 0.05_dp*cos(real(3*a + i + 7*e, dp))
-      u(i,a) = amp*sin(real(5*a + 2*i + 11*e, dp))
+      xref(i,a) = (s%coords(i,a) - lo)/(maxval(s%coords) - lo) + 0.05_dp*h*cos(real(3*a + i + 7*e, dp))
+      u(i,a) = amp*h*sin(real(5*a + 2*i + 11*e, dp))
     end do
   end do
 end subroutine test_element
+
+subroutine make_element(opts, q, s)
+  !! cubature and shape functions of opts%element, opts%order and opts%degree
+  type(bench_options), intent(in) :: opts
+  type(cubature), intent(out) :: q
+  type(shapefunc), intent(out) :: s
+  integer :: elm
+  select case (trim(opts%element))
+  case ('hex')
+    elm = CUB_HEX
+  case ('tet')
+    elm = CUB_TET
+  case ('wedge')
+    elm = CUB_WED
+  case default
+    error stop 'make_element: element must be hex, tet or wedge'
+  end select
+  if (opts%order < 1) error stop 'make_element: order must be at least 1'
+  q = cubature(elm, merge(opts%degree, 2*opts%order, opts%degree > 0))
+  s = shapefunc(q, opts%order)
+end subroutine make_element
+
+function element_name(s) result(name)
+  !! hex, tet, wedge, ... of the element of s
+  type(shapefunc), intent(in) :: s
+  character(:), allocatable :: name
+  character(*), parameter :: names(6) = [character(5) :: 'line', 'quad', 'hex', 'tri', 'tet', 'wedge']
+  integer, parameter :: codes(6) = [CUB_LIN, CUB_QUA, CUB_HEX, CUB_TRI, CUB_TET, CUB_WED]
+  name = trim(names(findloc(codes, s%elm, 1)))
+end function element_name
 
 subroutine element_gradients(q, s, xref, u, f)
   !! deformation gradient at every cubature point
@@ -137,11 +182,17 @@ subroutine check(cond, name)
   end if
 end subroutine check
 
-pure logical function close(x, y, rtol)
-  !! max-norm comparison relative to the size of y; flatten matrices with [m]
+pure logical function close1(x, y, rtol)
   real(dp), intent(in) :: x(:), y(:), rtol
-  close = maxval(abs(x - y)) <= rtol*maxval(abs(y))
-end function close
+  close1 = maxval(abs(x - y)) <= rtol*maxval(abs(y))
+end function close1
+
+pure logical function close2(x, y, rtol)
+  ! a rank-2 version, not [m]: nvfortran 26.3 -Mbounds aborts (internal error) on array
+  ! constructors of runtime-sized matrix sections
+  real(dp), intent(in) :: x(:,:), y(:,:), rtol
+  close2 = maxval(abs(x - y)) <= rtol*maxval(abs(y))
+end function close2
 
 subroutine check_summary()
   !! print the count and stop with an error if any check failed
@@ -190,10 +241,12 @@ subroutine parse_options(opts, description)
   type(bench_options), intent(inout) :: opts
   character(*), intent(in) :: description
   type(command_line_interface) :: cli
-  character(16) :: nelem, ntrial
+  character(16) :: nelem, ntrial, order, degree
   integer :: err
   write(nelem, '(i0)') opts%nelem
   write(ntrial, '(i0)') opts%ntrial
+  write(order, '(i0)') opts%order
+  write(degree, '(i0)') opts%degree
   call cli%init(description=description)
   call cli%add(switch='--nelem', switch_ab='-n', help='distinct elements per sweep', required=.false., &
     & act='store', def=nelem)
@@ -209,6 +262,12 @@ subroutine parse_options(opts, description)
     & act='store', def=trim(opts%cfgs))
   call cli%add(switch='--paradigms', help='comma-separated subset of the paradigms compared, or all', &
     & required=.false., act='store', def=trim(opts%paradigms))
+  call cli%add(switch='--element', switch_ab='-e', help='element type', required=.false., act='store', &
+    & def=trim(opts%element), choices='hex,tet,wedge')
+  call cli%add(switch='--order', switch_ab='-p', help='polynomial order of the shape functions', &
+    & required=.false., act='store', def=order)
+  call cli%add(switch='--degree', help='cubature degree; 0 = standard full integration (2 order)', &
+    & required=.false., act='store', def=degree)
   call cli%parse(error=err)
   if (err /= 0) error stop 'parse_options: invalid command line (see --help)'
   call cli%get(switch='--nelem', val=opts%nelem, error=err)
@@ -218,6 +277,9 @@ subroutine parse_options(opts, description)
   call cli%get(switch='--models', val=opts%models, error=err)
   call cli%get(switch='--cfgs', val=opts%cfgs, error=err)
   call cli%get(switch='--paradigms', val=opts%paradigms, error=err)
+  call cli%get(switch='--element', val=opts%element, error=err)
+  call cli%get(switch='--order', val=opts%order, error=err)
+  call cli%get(switch='--degree', val=opts%degree, error=err)
   if (opts%nelem < 1 .or. opts%ntrial < 1) error stop 'parse_options: nelem and ntrial must be positive'
 end subroutine parse_options
 
@@ -249,11 +311,9 @@ subroutine csv_row(unit, opts, s, paradigm, model, cfg, batch, quantity, value)
   character(*), intent(in) :: paradigm, model, cfg, quantity
   integer, intent(in) :: batch
   real(dp), intent(in) :: value
-  character(*), parameter :: names(6) = [character(5) :: 'line', 'quad', 'hex', 'tri', 'tet', 'wedge']
-  integer, parameter :: codes(6) = [CUB_LIN, CUB_QUA, CUB_HEX, CUB_TRI, CUB_TET, CUB_WED]
   if (unit == -1) return
   write(unit, '(5(a, ","), 4(i0, ","), a, ",", g0.7)') paradigm, trim(opts%tag), model, cfg, &
-    & trim(names(findloc(codes, s%elm, 1))), s%order, s%nnodes, s%npoints, batch, quantity, value
+    & element_name(s), s%order, s%nnodes, s%npoints, batch, quantity, value
 end subroutine csv_row
 
 !-----------------------------------------------------------------------
@@ -341,8 +401,8 @@ subroutine bench_paradigm(nat, rem, q, s, opts, clock, ping, label)
   end do
   checksum = 0
 
-  write(*, '(a, i0, a, i0, a, i0, a)') 'element: ', s%nnodes, ' nodes, ', nelem, ' elements, best of ', &
-    & ntrial, ' trials, wall time'
+  write(*, '(a, i0, a, i0, a, i0, a, i0, a)') element_name(s) // ', order ', s%order, ', ', q%npoints, &
+    & ' points, ', nelem, ' elements, best of ', ntrial, ' trials, wall time'
   ! the transport alone: a request and a reply of the reference configuration's size
   nb = 1
   t1 = timed('pings')/ntot

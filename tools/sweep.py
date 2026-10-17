@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
 """Run the whole benchmark sweep, then tabulate and plot it.
 
-For every installed compiler the native bench (hand-derived and JAX-exported materials),
-then, if .venv exists, the embedded-JAX and socket benches; optionally heap allocations
-per element with valgrind. Everything lands in results/<timestamp>/:
+For every installed compiler the native bench (hand-derived and JAX-exported materials) on
+hex8; for the first compiler also every element type and order of --elements; then, if
+.venv exists, the embedded-JAX and socket benches; optionally heap allocations per element
+with valgrind. Tables and the compiler and paradigm plots use hex8. Everything lands in results/<timestamp>/:
   env.json                  machine, compilers, versions, git commit, arguments
   <bench>_<compiler>.csv    raw rows of each bench (long format, see AGENTS.md)
   results.csv               all rows merged
@@ -100,6 +101,11 @@ def allocations(fc, env, out, args):
     return rows
 
 
+def hex8(rows):
+    """Rows of the trilinear hexahedron, the element every bench shares."""
+    return [r for r in rows if r["element"] == "hex" and r["order"] == "1"]
+
+
 def read_rows(path):
     with open(path) as fh:
         return list(csv.DictReader(l for l in fh if not l.startswith("#")))
@@ -126,6 +132,24 @@ def table(rows, quantity, title, unit):
     return "\n".join(lines) + "\n"
 
 
+def element_table(rows):
+    """Markdown table: native element time per element type and order (rows), model and cfg (columns)."""
+    sel = [r for r in rows if r["paradigm"] == "native" and r["quantity"] == "element_us"]
+    keys = sorted({(r["element"], int(r["order"]), int(r["nnodes"]), int(r["npoints"]), r["compiler"]) for r in sel})
+    if len({k[:2] for k in keys}) < 2:
+        return ""
+    val = {(r["element"], int(r["order"]), r["compiler"], r["model"], r["cfg"]): float(r["value"]) for r in sel}
+    comp = keys[0][4]
+    lines = [f"### Element R and K by element ({comp}, native, us per element)", "",
+             "| element | nodes | points | " + " | ".join(f"{m} {g}" for m in MODELS for g in CFGS) + " |",
+             "|---|---:|---:|" + "---:|" * 12]
+    for el, p, nn, npt, c in keys:
+        if c == comp:
+            lines.append(f"| {el} p={p} | {nn} | {npt} | " +
+                         " | ".join(f"{val.get((el, p, c, m, g), float('nan')):.4g}" for m in MODELS for g in CFGS) + " |")
+    return "\n".join(lines) + "\n"
+
+
 def plots(rows, out):
     import matplotlib
     matplotlib.use("Agg")
@@ -142,6 +166,8 @@ def plots(rows, out):
         return np.array([d.get((m, g), np.nan) for m in MODELS for g in CFGS])
 
     files = []
+    elements = rows
+    rows = hex8(rows)
     native = sorted({r["compiler"] for r in rows if r["paradigm"] == "native" and r["quantity"] == "element_us"
                      and r["batch"] == r["npoints"]})
     main = [c for c in native if any(r["paradigm"] == "export" and r["compiler"] == c for r in rows)]
@@ -203,6 +229,35 @@ def plots(rows, out):
         files.append("batch_scaling.png")
         fig.savefig(os.path.join(out, files[-1]), dpi=130)
         plt.close(fig)
+    # 4. element time against nodes per element, every element type and order
+    sel = [r for r in elements if r["quantity"] == "element_us" and r["paradigm"] in ("native", "export")]
+    if len({(r["element"], r["order"]) for r in sel}) > 1:
+        comp = sorted({r["compiler"] for r in sel if r["element"] != "hex" or r["order"] != "1"})[0]
+        fig, axes = plt.subplots(1, len(MODELS), figsize=(13, 3.6), sharey=True)
+        marks = {"hex": "s", "tet": "^", "wedge": "D"}
+        for ax, m in zip(axes, MODELS):
+            for g, color in zip(CFGS, ["C0", "C1", "C2"]):
+                for p, fill in (("native", True), ("export", False)):
+                    pts = sorted((int(r["nnodes"]), float(r["value"]), r["element"]) for r in sel
+                                 if r["compiler"] == comp and r["model"] == m and r["cfg"] == g and r["paradigm"] == p)
+                    for el in marks:
+                        xy = [(n, v) for n, v, e in pts if e == el]
+                        if xy:
+                            ax.plot(*zip(*xy), marker=marks[el], ls="-" if p == "native" else ":", color=color,
+                                    mfc=color if fill else "none", ms=5,
+                                    label=f"{g} {p}" if el == "hex" else None)
+            ax.set_xscale("log")
+            ax.set_yscale("log")
+            ax.set_xlabel("nodes per element")
+            ax.set_title(m, loc="left", fontsize=10)
+        axes[0].set_ylabel("element R, K (us)")
+        axes[-1].legend(frameon=False, fontsize=7)
+        fig.suptitle(f"{comp}: square hex, triangle tet, diamond wedge; filled hand-derived, open JAX-exported",
+                     fontsize=9, x=0.01, ha="left")
+        fig.tight_layout()
+        files.append("element_order.png")
+        fig.savefig(os.path.join(out, files[-1]), dpi=130)
+        plt.close(fig)
     return files
 
 
@@ -212,6 +267,8 @@ def main():
     ap.add_argument("--ntrial", type=int, default=7, help="timings per measurement (default 7)")
     ap.add_argument("--python-nelem", type=int, default=200, help="elements for the jax and socket benches")
     ap.add_argument("--compilers", default=",".join(COMPILERS), help="comma-separated, default: all installed")
+    ap.add_argument("--elements", default="hex:1,hex:2,tet:1,tet:2,wedge:1,wedge:2",
+                    help="element:order list run with the first compiler (default %(default)s)")
     ap.add_argument("--no-python", action="store_true", help="skip the jax and socket benches")
     ap.add_argument("--allocations", action="store_true", help="heap allocations per element with valgrind")
     ap.add_argument("--out", help="output directory (default results/<timestamp>)")
@@ -233,6 +290,15 @@ def main():
         rows += read_rows(f)
         if args.allocations and shutil.which("valgrind"):
             rows += allocations(fc, envs[fc], out, args)
+    for spec in args.elements.split(",") if compilers else []:
+        el, order = spec.split(":")
+        if (el, order) == ("hex", "1"):
+            continue
+        fc = compilers[0]
+        f = os.path.join(out, f"native_{fc}_{el}{order}.csv")
+        run(["fpm", "run", "--compiler", fc, "--profile", "release", "--", "--nelem", str(args.nelem),
+             "--ntrial", str(args.ntrial), "--element", el, "--order", order, "--csv", f, "--tag", fc], env=envs[fc])
+        rows += read_rows(f)
     python = os.path.join(ROOT, ".venv", "bin", "python")
     if not args.no_python and os.path.exists(python):
         common = ["--nelem", str(args.python_nelem), "--ntrial", str(args.ntrial), "--tag", "gfortran"]
@@ -248,9 +314,10 @@ def main():
         w.writeheader()
         w.writerows({k: r[k] for k in FIELDS} for r in rows)
     summary = "\n".join(t for t in [
-        table(rows, "element_us", "Element R and K", "us per element"),
-        table(rows, "material_ns_per_point", "Material call", "ns per point"),
-        table(rows, "heap_allocs_per_element", "Heap allocations", "per element, element and material sweep"),
+        table(hex8(rows), "element_us", "Element R and K, hex8", "us per element"),
+        table(hex8(rows), "material_ns_per_point", "Material call, hex8", "ns per point"),
+        table(hex8(rows), "heap_allocs_per_element", "Heap allocations, hex8", "per element, element and material sweep"),
+        element_table(rows),
     ] if t)
     files = plots(rows, out)
     with open(os.path.join(out, "summary.md"), "w") as fh:
