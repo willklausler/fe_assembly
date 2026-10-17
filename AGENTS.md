@@ -137,6 +137,12 @@ examples and the app run, and `tools/check_docs.py` passes (`./ci.sh` does all).
 - nvfortran 26.3 debug builds abort with an internal compiler error on array constructors of
   runtime-sized matrix sections (`[k(:,:,c)]`): `harness%close` has a rank-2 version.
 - ifx rejects a local entity with the name of a module the scope uses (gfortran accepts it).
+- ifx `-check all` (`/check:all` on Windows) prints a warning with a stack trace for every argument
+  temporary: pass variables, not expressions such as `f(eye3 + matmul(...))`, wherever a call is
+  repeated (60,000 such warnings once made Windows ifx debug CI take 30 minutes).
+- Tests: finite differences of K cover every column up to 30 dofs and every 7th beyond (hex27),
+  and the JAX-exported models only on hex8 (they are compared with the hand-derived ones on every
+  element), so the debug tests stay near 10 s.
 - ifx's `system_clock` follows the wall clock, which WSL2 re-syncs with jumps: the native bench uses
   `cpu_time`, the paradigm benches `clock_gettime(CLOCK_MONOTONIC)`.
 - oneAPI `setvars.sh` silently does nothing when run twice in one environment: `ci.sh` uses `--force`

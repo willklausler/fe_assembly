@@ -46,7 +46,8 @@ program test_fe_assembly
   vol = 0
   do g = 1, q%npoints
     jac = matmul(xh, transpose(s%derv(:,:,g)))
-    vol = vol + [det3(jac), det3(matmul(w, jac))]*q%weights(g)
+    rot = matmul(w, jac)
+    vol = vol + [det3(jac), det3(rot)]*q%weights(g)
   end do
   call check(abs(vol(2) - det3(w)*vol(1)) < tol*vol(2), 'hex8: current volume = det F * reference volume')
 
@@ -90,9 +91,13 @@ subroutine element_checks(nn)
   real(dp) :: rp(3*nn), rm(3*nn), kk(3*nn, 3*nn), k0(3*nn, 3*nn)
   type(material) :: mat
   type(geometry) :: geo
-  integer :: c, j, m, stat, n
+  integer :: c, j, m, stat, n, step
   character(:), allocatable :: id, el
   n = 3*nn
+  ! K by finite differences costs 2 n assemblies per material and configuration: every column
+  ! up to 30 dofs, every step-th beyond (hex27: 12 of 81 columns, cycling through the
+  ! directions); a full hex27 check took 20-40 minutes in Windows ifx debug CI
+  step = merge(1, (n + 11)/12, n <= 30)
   el = element_name(s) // achar(48 + s%order) // ' '
   call test_element(s, 0, 0.1_dp, xref, u)
   urot = matmul(rot - eye3, xref)
@@ -112,15 +117,19 @@ subroutine element_checks(nn)
     do c = 1, 3
       id = el // trim(mat%name) // ' ' // cfgname(c) // ': '
       call check(close(r(:,c), rfd, fdtol), id // 'R = dPi/du (finite differences)')
-      do j = 1, n
-        up = u
-        call bump(up, j, h)
-        call assemble(c, q, s, xref, up, mat, rp, kk)
-        call bump(up, j, -2*h)
-        call assemble(c, q, s, xref, up, mat, rm, kk)
-        kfd(:,j) = (rp - rm)/(2*h)
-      end do
-      call check(close(k(:,:,c), kfd, fdtol), id // 'K = dR/du (finite differences)')
+      ! the exported models equal the hand-derived ones on every element (compare_paradigm);
+      ! their K by finite differences runs on hex8 only
+      if (m <= 4 .or. (element_name(s) == 'hex' .and. s%order == 1)) then
+        do j = 1, n, step
+          up = u
+          call bump(up, j, h)
+          call assemble(c, q, s, xref, up, mat, rp, kk)
+          call bump(up, j, -2*h)
+          call assemble(c, q, s, xref, up, mat, rm, kk)
+          kfd(:,j) = (rp - rm)/(2*h)
+        end do
+        call check(close(k(:,1:n:step,c), kfd(:,1:n:step), fdtol), id // 'K = dR/du (finite differences)')
+      end if
       call check(close(k(:,:,c), transpose(k(:,:,c)), tol), id // 'K symmetric')
       call check(close(r(:,c), r(:,1), tol), id // 'R equals reference configuration')
       call check(close(k(:,:,c), k(:,:,1), tol), id // 'K equals reference configuration')
@@ -157,12 +166,15 @@ function energy(mat, xref, uu) result(pi)
   ! element strain energy, integrated like the element routines
   type(material), intent(in) :: mat
   real(dp), intent(in) :: xref(:,:), uu(:,:)
-  real(dp) :: pi, dndx(3, s%nnodes), dv
+  real(dp) :: pi, dndx(3, s%nnodes), dv, f(3,3)
   integer :: g
   pi = 0
   do g = 1, q%npoints
     call shape_gradients(q, s, g, xref, dndx, dv)
-    pi = pi + mat%energy(eye3 + matmul(uu, transpose(dndx)), mat%par)*dv
+    ! F in a variable, not an expression argument: ifx -check all reports every argument
+    ! temporary with a stack trace (60,000 of them made Windows ifx debug CI take 30 minutes)
+    f = eye3 + matmul(uu, transpose(dndx))
+    pi = pi + mat%energy(f, mat%par)*dv
   end do
 end function energy
 

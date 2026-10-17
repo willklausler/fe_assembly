@@ -396,7 +396,8 @@ pure subroutine nh_ref(f, par, s, c)
   real(dp), intent(out) :: s(6), c(6,6)
   real(dp) :: t3(3,3), ci(3,3), lnj
   lnj = log(det3(f))
-  call inv3(matmul(transpose(f), f), ci)
+  t3 = matmul(transpose(f), f)
+  call inv3(t3, ci)
   t3 = par(2)*(eye3 - ci) + par(1)*lnj*ci
   call voigt(t3, s)
   c = 0
@@ -450,7 +451,8 @@ pure subroutine mnh_ref(f, par, s, c)
   real(dp), intent(out) :: s(6), c(6,6)
   real(dp) :: t3(3,3), ci(3,3), siso(3,3), j, i1, p, pt, g
   j = det3(f)
-  call inv3(matmul(transpose(f), f), ci)
+  t3 = matmul(transpose(f), f)
+  call inv3(t3, ci)
   i1 = sum(f*f)
   p = par(1)/2*(j - 1/j)
   pt = par(1)*j
