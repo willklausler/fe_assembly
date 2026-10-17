@@ -14,7 +14,10 @@ module materials_ad
   private
 
   public :: material_set_ad
-  public :: ad_svk_ref, ad_svk_cur, ad_svk_mix, ad_nh_ref, ad_nh_cur, ad_nh_mix, ad_mnh_ref, ad_mnh_cur, ad_mnh_mix, ad_mr_ref, ad_mr_cur, ad_mr_mix
+  public :: ad_svk_ref, ad_svk_cur, ad_svk_mix
+  public :: ad_nh_ref, ad_nh_cur, ad_nh_mix
+  public :: ad_mnh_ref, ad_mnh_cur, ad_mnh_mix
+  public :: ad_mr_ref, ad_mr_cur, ad_mr_mix
 
 contains
 

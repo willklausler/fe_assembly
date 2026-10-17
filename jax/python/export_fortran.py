@@ -284,7 +284,8 @@ def main():
             src, n = routine(model, cfg)
             routines.append(src)
             counts[(model, cfg)] = n
-    names = ", ".join(f"ad_{m}_{c}" for m in NPAR for c in ("ref", "cur", "mix"))
+    # one public statement per model: lines stay under the 132-character limit (gfortran 13 enforces it)
+    names = "\n".join("  public :: " + ", ".join(f"ad_{m}_{c}" for c in ("ref", "cur", "mix")) for m in NPAR)
     setters = []
     for k, m in enumerate(NPAR, start=1):
         setters += [f"  m({k})%name = '{m}-ad'",
@@ -307,7 +308,7 @@ module materials_ad
   private
 
   public :: material_set_ad
-  public :: {names}
+{names}
 
 contains
 
