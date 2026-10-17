@@ -121,7 +121,7 @@ def table(rows, quantity, title, unit):
                                  ["native", "export", "jax", "socket"] else 9, c[1], c[2]))
     val = {(r["model"], r["cfg"], r["paradigm"], r["compiler"], int(r["batch"])): float(r["value"]) for r in sel}
     npts = sel[0]["npoints"]
-    head = [f"{p} {c}" + ("" if p in ("native", "export") else f" b={b}") for p, c, b in cols]
+    head = [f"{p} {c}" + ("" if p in ("native", "export", "cached") else f" b={b}") for p, c, b in cols]
     lines = [f"### {title} ({unit})", "", "| model | cfg | " + " | ".join(head) + " |",
              "|---|---|" + "---:|" * len(cols)]
     for m in MODELS:

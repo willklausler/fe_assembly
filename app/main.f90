@@ -24,6 +24,7 @@ program bench
   real(dp) :: telem, tmat, checksum = 0
   type(stopwatch) :: sw
   integer :: e, m, c, csv, nelem
+  logical :: cache
   character(:), allocatable :: model
 
   call parse_options(opts, 'element R and K time per model and configuration, native and JAX-exported')
@@ -38,10 +39,12 @@ program bench
   ! Distinct distorted elements under moderate deformation, so no two calls
   ! see the same data; F at every point feeds the material-only timing.
   allocate(xref(3, s%nnodes, nelem), u(3, s%nnodes, nelem), fg(3, 3, q%npoints, nelem), geo(nelem))
+  ! the reference geometry only when timed: its two allocations per element would count
+  cache = selected('cached', opts%paradigms)
   do e = 1, nelem
     call test_element(s, e, 0.05_dp, xref(:,:,e), u(:,:,e))
     call element_gradients(q, s, xref(:,:,e), u(:,:,e), fg(:,:,:,e))
-    call reference_geometry(q, s, xref(:,:,e), geo(e))
+    if (cache) call reference_geometry(q, s, xref(:,:,e), geo(e))
   end do
 
   call csv_open(opts, csv)
