@@ -23,6 +23,7 @@ module elements
   private
 
   public :: elem_ref, elem_cur, elem_mix, shape_gradients
+  public :: geometry, reference_geometry
   public :: ELEM_OK, ELEM_INVERTED, ELEM_DEGENERATE
 
   integer, parameter :: ELEM_OK = 0
@@ -32,7 +33,30 @@ module elements
   integer, parameter :: ELEM_DEGENERATE = 2
     !! status: the reference element has det(dX/dxi) <= 0 at a cubature point; R = K = 0
 
+  type :: geometry
+    !! reference geometry of one element, fixed across Newton iterations: dN/dX and dV
+    !! at every cubature point (the total Lagrangian and two-point forms can reuse it;
+    !! the updated Lagrangian form cannot, its gradients follow the deformation)
+    real(dp), allocatable :: dndx(:,:,:)
+      !! dN/dX(3, nnodes, npoints)
+    real(dp), allocatable :: dv(:)
+      !! volume weight dV(npoints)
+  end type geometry
+
 contains
+
+subroutine reference_geometry(q, s, xref, geo)
+  !! dN/dX and dV at every cubature point of the element with reference coordinates xref
+  type(cubature), intent(in) :: q
+  type(shapefunc), intent(in) :: s
+  real(dp), intent(in) :: xref(:,:)
+  type(geometry), intent(out) :: geo
+  integer :: g
+  allocate(geo%dndx(3, s%nnodes, q%npoints), geo%dv(q%npoints))
+  do g = 1, q%npoints
+    call shape_gradients(q, s, g, xref, geo%dndx(:,:,g), geo%dv(g))
+  end do
+end subroutine reference_geometry
 
 pure subroutine shape_gradients(q, s, g, x, dndx, dv)
   !! dN/dx and the volume weight at cubature point g, for nodal coordinates x
@@ -176,7 +200,7 @@ subroutine check_point(reference_ok, current_ok, caller, r, k, status, bad)
   error stop msg
 end subroutine check_point
 
-subroutine elem_ref(q, s, xref, u, mat, r, k, status)
+subroutine elem_ref(q, s, xref, u, mat, r, k, status, geo)
   !! total Lagrangian: R = int B^T S dV, K = int (B^T CC B + geometric(S)) dV
   type(cubature), intent(in) :: q
   type(shapefunc), intent(in) :: s
@@ -185,14 +209,34 @@ subroutine elem_ref(q, s, xref, u, mat, r, k, status)
   real(dp), intent(out) :: r(:), k(:,:)
   integer, intent(out), optional :: status
     !! ELEM_OK, ELEM_INVERTED or ELEM_DEGENERATE; without it a bad element stops
-  real(dp) :: dndx(3, s%nnodes, q%npoints), dv(q%npoints), f(3,3,q%npoints)
-  real(dp) :: sv(6, q%npoints), cv(6,6,q%npoints), bm(6, 3*s%nnodes)
+  type(geometry), intent(in), optional :: geo
+    !! reference_geometry of this element: dN/dX and dV are not recomputed
+  real(dp) :: dndx(3, s%nnodes, q%npoints), dv(q%npoints)
+  integer :: g
+  if (present(geo)) then
+    call ref_core(q, s, geo%dndx, geo%dv, u, mat, r, k, status)
+    return
+  end if
+  do g = 1, q%npoints
+    call shape_gradients(q, s, g, xref, dndx(:,:,g), dv(g))
+  end do
+  call ref_core(q, s, dndx, dv, u, mat, r, k, status)
+end subroutine elem_ref
+
+subroutine ref_core(q, s, dndx, dv, u, mat, r, k, status)
+  ! elem_ref after the reference geometry
+  type(cubature), intent(in) :: q
+  type(shapefunc), intent(in) :: s
+  real(dp), intent(in) :: dndx(3, s%nnodes, q%npoints), dv(q%npoints), u(:,:)
+  class(material), intent(in) :: mat
+  real(dp), intent(out) :: r(:), k(:,:)
+  integer, intent(out), optional :: status
+  real(dp) :: f(3,3,q%npoints), sv(6, q%npoints), cv(6,6,q%npoints), bm(6, 3*s%nnodes)
   logical :: bad
   integer :: g
   r = 0
   k = 0
   do g = 1, q%npoints
-    call shape_gradients(q, s, g, xref, dndx(:,:,g), dv(g))
     f(:,:,g) = grad_u(u, dndx(:,:,g))
     call check_point(dv(g) > 0, det3(f(:,:,g)) > 0, 'elem_ref', r, k, status, bad)
     if (bad) return
@@ -204,7 +248,7 @@ subroutine elem_ref(q, s, xref, u, mat, r, k, status)
     call add_voigt(bm, dndx(:,:,g), sv(:,g), cv(:,:,g), dv(g), r, k)
   end do
   call mirror(k)
-end subroutine elem_ref
+end subroutine ref_core
 
 subroutine elem_cur(q, s, xref, u, mat, r, k, status)
   !! updated Lagrangian: R = int B^T sigma dv, K = int (B^T cc B + geometric(sigma)) dv
@@ -247,7 +291,7 @@ subroutine elem_cur(q, s, xref, u, mat, r, k, status)
   call mirror(k)
 end subroutine elem_cur
 
-subroutine elem_mix(q, s, xref, u, mat, r, k, status)
+subroutine elem_mix(q, s, xref, u, mat, r, k, status, geo)
   !! two-point: R = int P : grad N dV, K_aibk = int N_a,J A_iJkL N_b,L dV (geometric term inside AA)
   type(cubature), intent(in) :: q
   type(shapefunc), intent(in) :: s
@@ -256,14 +300,34 @@ subroutine elem_mix(q, s, xref, u, mat, r, k, status)
   real(dp), intent(out) :: r(:), k(:,:)
   integer, intent(out), optional :: status
     !! ELEM_OK, ELEM_INVERTED or ELEM_DEGENERATE; without it a bad element stops
-  real(dp) :: dndx(3, s%nnodes, q%npoints), dv(q%npoints), f(3,3,q%npoints)
-  real(dp) :: p(3,3,q%npoints), am(9,9,q%npoints), w(9,3)
+  type(geometry), intent(in), optional :: geo
+    !! reference_geometry of this element: dN/dX and dV are not recomputed
+  real(dp) :: dndx(3, s%nnodes, q%npoints), dv(q%npoints)
+  integer :: g
+  if (present(geo)) then
+    call mix_core(q, s, geo%dndx, geo%dv, u, mat, r, k, status)
+    return
+  end if
+  do g = 1, q%npoints
+    call shape_gradients(q, s, g, xref, dndx(:,:,g), dv(g))
+  end do
+  call mix_core(q, s, dndx, dv, u, mat, r, k, status)
+end subroutine elem_mix
+
+subroutine mix_core(q, s, dndx, dv, u, mat, r, k, status)
+  ! elem_mix after the reference geometry
+  type(cubature), intent(in) :: q
+  type(shapefunc), intent(in) :: s
+  real(dp), intent(in) :: dndx(3, s%nnodes, q%npoints), dv(q%npoints), u(:,:)
+  class(material), intent(in) :: mat
+  real(dp), intent(out) :: r(:), k(:,:)
+  integer, intent(out), optional :: status
+  real(dp) :: f(3,3,q%npoints), p(3,3,q%npoints), am(9,9,q%npoints), w(9,3)
   logical :: bad
   integer :: g, a, b, i, kk, ia, ib
   r = 0
   k = 0
   do g = 1, q%npoints
-    call shape_gradients(q, s, g, xref, dndx(:,:,g), dv(g))
     f(:,:,g) = grad_u(u, dndx(:,:,g))
     call check_point(dv(g) > 0, det3(f(:,:,g)) > 0, 'elem_mix', r, k, status, bad)
     if (bad) return
@@ -296,6 +360,6 @@ subroutine elem_mix(q, s, xref, u, mat, r, k, status)
     end do
   end do
   call mirror(k)
-end subroutine elem_mix
+end subroutine mix_core
 
 end module elements

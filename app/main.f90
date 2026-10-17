@@ -9,15 +9,18 @@ program bench
   use shapefuncs, only: shapefunc
   use materials, only: material, material_set, cfgname
   use materials_ad, only: material_set_ad
+  use elements, only: geometry, reference_geometry
   use harness, only: test_element, element_gradients, assemble, stopwatch, start_watch, cpu_seconds, &
     & bench_options, parse_options, selected, csv_open, csv_row, make_element, element_name
   implicit none
   character(*), parameter :: paradigm(2) = ['native', 'export']
+  ! cached: native materials, total Lagrangian and two-point elements with reference_geometry
   type(bench_options) :: opts
   type(cubature) :: q
   type(shapefunc) :: s
   type(material), allocatable :: mats(:)
   real(dp), allocatable :: xref(:,:,:), u(:,:,:), fg(:,:,:,:)
+  type(geometry), allocatable :: geo(:)
   real(dp) :: telem, tmat, checksum = 0
   type(stopwatch) :: sw
   integer :: e, m, c, csv, nelem
@@ -34,10 +37,11 @@ program bench
 
   ! Distinct distorted elements under moderate deformation, so no two calls
   ! see the same data; F at every point feeds the material-only timing.
-  allocate(xref(3, s%nnodes, nelem), u(3, s%nnodes, nelem), fg(3, 3, q%npoints, nelem))
+  allocate(xref(3, s%nnodes, nelem), u(3, s%nnodes, nelem), fg(3, 3, q%npoints, nelem), geo(nelem))
   do e = 1, nelem
     call test_element(s, e, 0.05_dp, xref(:,:,e), u(:,:,e))
     call element_gradients(q, s, xref(:,:,e), u(:,:,e), fg(:,:,:,e))
+    call reference_geometry(q, s, xref(:,:,e), geo(e))
   end do
 
   call csv_open(opts, csv)
@@ -46,7 +50,9 @@ program bench
   write(*, '(a8, a5, a8, 3a12)') 'model', 'cfg', 'impl', 'element us', 'material ns', 'material %'
   do m = 1, size(mats)
     model = trim(mats(1 + mod(m - 1, 4))%name)
-    if (.not. (selected(model, opts%models) .and. selected(paradigm(1 + (m - 1)/4), opts%paradigms))) cycle
+    if (.not. selected(model, opts%models)) cycle
+    if (.not. (selected(paradigm(1 + (m - 1)/4), opts%paradigms) .or. (m <= 4 .and. selected('cached', opts%paradigms)))) &
+      & cycle
     do c = 1, 3
       if (.not. selected(cfgname(c), opts%cfgs)) cycle
       sw = start_watch(opts%ntrial, cpu_seconds)
@@ -65,19 +71,36 @@ program bench
         & 1e6_dp*telem/nelem)
       call csv_row(csv, opts, s, paradigm(1 + (m - 1)/4), model, cfgname(c), q%npoints, 'material_ns_per_point', &
         & 1e9_dp*tmat/(nelem*q%npoints))
+      if (m > 4 .or. c == 2 .or. .not. selected('cached', opts%paradigms)) cycle
+      sw = start_watch(opts%ntrial, cpu_seconds)
+      do while (sw%next())
+        call element_sweep(cached=.true.)
+      end do
+      telem = sw%best
+      write(*, '(a8, a5, a8, f12.2)') model, cfgname(c), 'cached', 1e6_dp*telem/nelem
+      call csv_row(csv, opts, s, 'cached', model, cfgname(c), q%npoints, 'element_us', 1e6_dp*telem/nelem)
     end do
   end do
   write(*, '(a, es12.4)') 'checksum ', checksum
   if (csv /= -1) close(csv)
   ! gfortran does not free main-program allocatables at exit; LeakSanitizer would report them
-  deallocate(mats, xref, u, fg, model)
+  deallocate(mats, xref, u, fg, geo, model)
 
 contains
 
-subroutine element_sweep()
-  ! R and K of every element; K feeds the checksum so no call is optimized away
+subroutine element_sweep(cached)
+  ! R and K of every element (with the cached reference geometry if cached); K feeds the
+  ! checksum so no call is optimized away
+  logical, intent(in), optional :: cached
   real(dp) :: r(3*s%nnodes), k(3*s%nnodes, 3*s%nnodes)
   integer :: e
+  if (present(cached)) then
+    do e = 1, nelem
+      call assemble(c, q, s, xref(:,:,e), u(:,:,e), mats(m), r, k, geo=geo(e))
+      checksum = checksum + k(1,1)
+    end do
+    return
+  end if
   do e = 1, nelem
     call assemble(c, q, s, xref(:,:,e), u(:,:,e), mats(m), r, k)
     checksum = checksum + k(1,1)

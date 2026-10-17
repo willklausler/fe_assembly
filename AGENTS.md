@@ -97,6 +97,8 @@ examples and the app run, and `tools/check_docs.py` passes (`./ci.sh` does all).
   in the package standard. Its header records a hash of the generator sources; CI and `ci.sh` run
   `export_fortran.py --check` (no JAX needed). Regenerate and commit it with every change to either
   source, including comments.
+- The main bench's paradigms are `native`, `export` (JAX-exported) and `cached` (native with the
+  reference geometry precomputed, ref and mix only).
 - Benches build the element with `harness%make_element` from `--element`, `--order` and `--degree`
   (default 2 order, the standard full integration). The test checks hex8, hex27, tet4, tet10 and
   wedge6; test elements have unit size, with perturbation and displacement scaled by 1/order.

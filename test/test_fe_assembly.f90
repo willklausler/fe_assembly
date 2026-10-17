@@ -8,7 +8,7 @@ program test_fe_assembly
   use tensors, only: eye3, det3, inv3
   use materials, only: material, material_set, cfgname
   use materials_ad, only: material_set_ad
-  use elements, only: shape_gradients, ELEM_INVERTED
+  use elements, only: shape_gradients, ELEM_INVERTED, geometry, reference_geometry
   use harness, only: test_element, assemble, check, close, check_summary, compare_paradigm, &
     & bench_options, make_element, element_name
   implicit none
@@ -89,12 +89,14 @@ subroutine element_checks(nn)
   real(dp) :: r(3*nn, 3), k(3*nn, 3*nn, 3), rfd(3*nn), kfd(3*nn, 3*nn)
   real(dp) :: rp(3*nn), rm(3*nn), kk(3*nn, 3*nn), k0(3*nn, 3*nn)
   type(material) :: mat
+  type(geometry) :: geo
   integer :: c, j, m, stat, n
   character(:), allocatable :: id, el
   n = 3*nn
   el = element_name(s) // achar(48 + s%order) // ' '
   call test_element(s, 0, 0.1_dp, xref, u)
   urot = matmul(rot - eye3, xref)
+  call reference_geometry(q, s, xref, geo)
   do m = 1, size(mats)
     mat = mats(m)
     do c = 1, 3
@@ -122,6 +124,11 @@ subroutine element_checks(nn)
       call check(close(k(:,:,c), transpose(k(:,:,c)), tol), id // 'K symmetric')
       call check(close(r(:,c), r(:,1), tol), id // 'R equals reference configuration')
       call check(close(k(:,:,c), k(:,:,1), tol), id // 'K equals reference configuration')
+      if (c /= 2) then
+        ! the cached reference geometry runs the same arithmetic: identical R and K
+        call assemble(c, q, s, xref, u, mat, rp, kk, geo=geo)
+        call check(all(rp == r(:,c)) .and. all(kk == k(:,:,c)), id // 'cached geometry: identical R, K')
+      end if
 
       call assemble(c, q, s, xref, 0*u, mat, rp, kk)
       call check(maxval(abs(rp)) < tol*maxval(abs(kk)), id // 'R = 0 at u = 0')

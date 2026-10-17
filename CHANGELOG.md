@@ -16,6 +16,7 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 - Element status flag (`ELEM_INVERTED`, `ELEM_DEGENERATE`) from one kinematics check per point; the material routines no longer stop on det F <= 0.
 - Element type and order on the command line (`--element hex|tet|wedge`, `--order`, `--degree`, standard full integration by default); the test covers hex8, hex27, tet4, tet10 and wedge6 (1,327 checks); the sweep adds an element axis, table and plot.
 - `llms.txt` (complete API reference, checked by `tools/check_docs.py` in CI) and two examples, `demo_configurations` and `demo_inverted`.
+- Reusable reference geometry (`geometry`, `reference_geometry`, optional `geo` of `elem_ref` and `elem_mix`) and a `cached` paradigm in the bench: about 2 to 4% faster elements.
 - App `bench`: time per element for R and K, and for the material call alone, per material and configuration.
 - Typst notes: stresses and tangents of Saint Venant-Kirchhoff, Neo-Hooke, modified Neo-Hooke and Mooney-Rivlin in three configurations.
 - Modules `tensors`, `materials`, `elements`: Saint Venant-Kirchhoff, Neo-Hooke, modified Neo-Hooke and Mooney-Rivlin in the reference, current and two-point configurations, and element R and K for each. `material_set(lam, mu)` gives all four with matching small-strain constants.

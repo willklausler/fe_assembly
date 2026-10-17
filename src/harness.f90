@@ -9,7 +9,7 @@ module harness
   use shapefuncs, only: shapefunc
   use tensors, only: eye3
   use materials, only: material, cfgname
-  use elements, only: elem_ref, elem_cur, elem_mix, shape_gradients
+  use elements, only: elem_ref, elem_cur, elem_mix, shape_gradients, geometry
   implicit none
   private
 
@@ -147,7 +147,7 @@ subroutine element_gradients(q, s, xref, u, f)
   end do
 end subroutine element_gradients
 
-subroutine assemble(c, q, s, xref, u, mat, r, k, status)
+subroutine assemble(c, q, s, xref, u, mat, r, k, status, geo)
   !! element R and K in configuration c (1 ref, 2 cur, 3 mix)
   integer, intent(in) :: c
   type(cubature), intent(in) :: q
@@ -157,13 +157,15 @@ subroutine assemble(c, q, s, xref, u, mat, r, k, status)
   real(dp), intent(out) :: r(:), k(:,:)
   integer, intent(out), optional :: status
     !! as elements: ELEM_OK, ELEM_INVERTED, ELEM_DEGENERATE; without it a bad element stops
+  type(geometry), intent(in), optional :: geo
+    !! cached reference geometry (ref and mix; cur cannot use it and ignores it)
   select case (c)
   case (1)
-    call elem_ref(q, s, xref, u, mat, r, k, status)
+    call elem_ref(q, s, xref, u, mat, r, k, status, geo)
   case (2)
     call elem_cur(q, s, xref, u, mat, r, k, status)
   case default
-    call elem_mix(q, s, xref, u, mat, r, k, status)
+    call elem_mix(q, s, xref, u, mat, r, k, status, geo)
   end select
 end subroutine assemble
 
